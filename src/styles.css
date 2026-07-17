@@ -334,6 +334,63 @@ select {
   font-size: 11.5px;
 }
 
+.model-presets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.model-preset {
+  min-width: 0;
+  min-height: 28px;
+  padding: 5px 7px;
+  overflow: hidden;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 9.5px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease,
+    color 150ms ease;
+}
+
+.model-preset:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
+
+.model-preset:hover {
+  border-color: var(--hairline-strong);
+  color: var(--ink);
+}
+
+.model-preset.is-selected {
+  border-color: color-mix(in srgb, var(--moss) 62%, var(--hairline));
+  background: color-mix(in srgb, var(--moss) 10%, transparent);
+  color: var(--moss-dark);
+}
+
+.model-preset:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--focus) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.model-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -1px 0 0;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
 select:hover,
 .model-input:hover,
 .objective-field textarea:hover {

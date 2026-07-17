@@ -1,11 +1,94 @@
 import { clamp01, normalizeAssessment } from "./telemetry.mjs";
 
-const DEFAULT_OPENAI_MODEL = "gpt-4o-mini";
-const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+const DEFAULT_OPENAI_MODEL = "gpt-5.6-terra";
+const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 const DEFAULT_MOCK_MODEL = "nirvana-mock-v1";
 const DEFAULT_MOCK_JUDGE_MODEL = "nirvana-mock-judge-v1";
 const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_UPSTREAM_BODY_BYTES = 2 * 1024 * 1024;
+
+const OPENAI_MODEL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: "gpt-5.6-sol",
+    label: "5.6 Sol",
+    role: "Frontier quality",
+    transport: "responses",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "gpt-5.6-terra",
+    label: "5.6 Terra",
+    role: "Balanced",
+    transport: "responses",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "gpt-5.6-luna",
+    label: "5.6 Luna",
+    role: "Fast volume",
+    transport: "responses",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "gpt-5-nano",
+    label: "GPT-5 nano",
+    role: "Legacy fast",
+    transport: "responses",
+    featured: false,
+  }),
+  Object.freeze({
+    id: "gpt-4.1-mini",
+    label: "GPT-4.1 mini",
+    role: "Legacy baseline",
+    transport: "responses",
+    featured: false,
+  }),
+  Object.freeze({
+    id: "gpt-4o-mini",
+    label: "GPT-4o mini",
+    role: "Legacy baseline",
+    transport: "responses",
+    featured: false,
+  }),
+]);
+
+const ANTHROPIC_MODEL_CATALOG = Object.freeze([
+  Object.freeze({
+    id: "claude-sonnet-5",
+    label: "Sonnet 5",
+    role: "Balanced",
+    transport: "messages",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "claude-opus-4-8",
+    label: "Opus 4.8",
+    role: "Complex judge",
+    transport: "messages",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "claude-haiku-4-5-20251001",
+    label: "Haiku 4.5",
+    role: "Fast volume",
+    transport: "messages",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "claude-fable-5",
+    label: "Fable 5",
+    role: "Stress test",
+    transport: "messages",
+    featured: true,
+  }),
+  Object.freeze({
+    id: "claude-sonnet-4-6",
+    label: "Sonnet 4.6",
+    role: "Stable baseline",
+    transport: "messages",
+    featured: false,
+  }),
+]);
 
 export class ProviderError extends Error {
   constructor(code, message, options = {}) {
@@ -22,6 +105,61 @@ export class ProviderError extends Error {
 function boundedInteger(value, fallback, min, max) {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback;
+}
+
+function modelCatalogWithDefault(catalog, defaultModel, fallbackTransport) {
+  if (catalog.some((item) => item.id === defaultModel)) return [...catalog];
+  return [
+    {
+      id: defaultModel,
+      label: defaultModel,
+      role: "Server default",
+      transport: fallbackTransport,
+      featured: true,
+    },
+    ...catalog,
+  ];
+}
+
+function openAIApiMode(env) {
+  if (["responses", "chat_completions"].includes(env.OPENAI_API_MODE)) {
+    return env.OPENAI_API_MODE;
+  }
+  const baseUrl = env.OPENAI_BASE_URL?.trim().replace(/\/+$/, "");
+  return !baseUrl || baseUrl === "https://api.openai.com/v1"
+    ? "responses"
+    : "chat_completions";
+}
+
+function openAIReasoningEffort(env) {
+  const supported = ["none", "low", "medium", "high", "xhigh", "max"];
+  return supported.includes(env.OPENAI_REASONING_EFFORT)
+    ? env.OPENAI_REASONING_EFFORT
+    : "medium";
+}
+
+function isReasoningModel(model) {
+  return /^(?:gpt-5(?:\.|-|$)|o[1-9](?:\.|-|$))/i.test(model);
+}
+
+export function reasoningEffortForModel(model, configuredEffort) {
+  const curated56 = /^gpt-5\.6-(?:sol|terra|luna)(?:-|$)/i.test(model);
+  if (curated56) {
+    return ["none", "low", "medium", "high", "xhigh", "max"].includes(
+      configuredEffort,
+    )
+      ? configuredEffort
+      : undefined;
+  }
+
+  const legacyGpt5 = /^gpt-5(?:\.|-|$)/i.test(model);
+  const oSeries = /^o[1-9](?:\.|-|$)/i.test(model);
+  if (legacyGpt5 || oSeries) {
+    return ["low", "medium", "high"].includes(configuredEffort)
+      ? configuredEffort
+      : undefined;
+  }
+  return undefined;
 }
 
 function availableProvider(provider, env) {
@@ -60,7 +198,12 @@ function chooseJudgeProvider(env, targetProvider) {
 function chooseJudgeModel(env, judgeProvider, targetProvider, targetModel) {
   if (env.NIRVANA_JUDGE_MODEL) return env.NIRVANA_JUDGE_MODEL;
   if (judgeProvider === "openai" && targetProvider === "openai") {
-    return targetModel === "gpt-4.1-mini" ? "gpt-4o-mini" : "gpt-4.1-mini";
+    return targetModel === "gpt-5.6-sol" ? "gpt-5.6-terra" : "gpt-5.6-sol";
+  }
+  if (judgeProvider === "anthropic" && targetProvider === "anthropic") {
+    return targetModel === "claude-opus-4-8"
+      ? "claude-sonnet-5"
+      : "claude-opus-4-8";
   }
   if (judgeProvider === "mock" && targetProvider === "mock") {
     return targetModel === DEFAULT_MOCK_JUDGE_MODEL
@@ -86,6 +229,8 @@ export function getRuntimeConfig(env = process.env) {
       openai: {
         available: availableProvider("openai", env),
         defaultModel: defaultModelForProvider("openai", env),
+        apiMode: openAIApiMode(env),
+        reasoningEffort: openAIReasoningEffort(env),
         simulated: false,
       },
       anthropic: {
@@ -115,7 +260,7 @@ export function getRuntimeConfig(env = process.env) {
     ),
     maxOutputTokens: boundedInteger(
       env.NIRVANA_MAX_OUTPUT_TOKENS,
-      2_048,
+      4_096,
       128,
       8_192,
     ),
@@ -129,38 +274,79 @@ export function getPublicConfig(env = process.env) {
     mock: {
       label: "Deterministic mock",
       detail: "Local simulated data",
-      models: Array.from(
-        new Set([
-          runtime.providers.mock.defaultModel,
-          DEFAULT_MOCK_MODEL,
-          DEFAULT_MOCK_JUDGE_MODEL,
-        ]),
+      modelOptions: modelCatalogWithDefault(
+        [
+          {
+            id: DEFAULT_MOCK_MODEL,
+            label: "Mock target",
+            role: "Deterministic",
+            transport: "mock",
+            featured: false,
+          },
+          {
+            id: DEFAULT_MOCK_JUDGE_MODEL,
+            label: "Mock judge",
+            role: "Deterministic",
+            transport: "mock",
+            featured: false,
+          },
+        ],
+        runtime.providers.mock.defaultModel,
+        "mock",
       ),
     },
     openai: {
       label: "OpenAI / compatible",
       detail: runtime.providers.openai.available
-        ? "Server credential available"
+        ? `${runtime.providers.openai.apiMode === "responses" ? "Responses API" : "Chat Completions"} · credential available`
         : "Server credential not detected",
-      models: Array.from(
-        new Set([runtime.providers.openai.defaultModel, "gpt-4o-mini", "gpt-4.1-mini"]),
+      modelOptions: modelCatalogWithDefault(
+        OPENAI_MODEL_CATALOG.map((model) => ({
+          ...model,
+          transport: runtime.providers.openai.apiMode,
+        })),
+        runtime.providers.openai.defaultModel,
+        runtime.providers.openai.apiMode,
       ),
     },
     anthropic: {
       label: "Anthropic",
       detail: runtime.providers.anthropic.available
-        ? "Server credential available"
+        ? "Messages API · credential available"
         : "Server credential not detected",
-      models: [runtime.providers.anthropic.defaultModel],
+      modelOptions: modelCatalogWithDefault(
+        ANTHROPIC_MODEL_CATALOG,
+        runtime.providers.anthropic.defaultModel,
+        "messages",
+      ),
     },
   };
   return {
     providers: Object.entries(runtime.providers).map(([id, provider]) => ({
       id,
       ...providerInfo[id],
+      models: providerInfo[id].modelOptions.map((model) => model.id),
       available: provider.available,
       defaultModel: provider.defaultModel,
     })),
+    execution: {
+      maxOutputTokens: runtime.maxOutputTokens,
+      openai: {
+        apiMode: runtime.providers.openai.apiMode,
+        reasoningEffort: runtime.providers.openai.reasoningEffort,
+      },
+      temperaturePolicy: {
+        responses: { kind: "omitted" },
+        chat_completions: {
+          kind: "request_value",
+          answer: 0.4,
+          assessment: 0,
+          reasoningModels: "omitted",
+        },
+        messages: { kind: "omitted" },
+        mock: { kind: "deterministic" },
+      },
+    },
     defaults: {
       targetProvider: runtime.target.provider,
       targetModel: runtime.target.model,
@@ -281,6 +467,86 @@ function contentToText(content) {
   return "";
 }
 
+function responsesText(result) {
+  if (typeof result?.output_text === "string" && result.output_text.trim()) {
+    return { text: result.output_text.trim(), refusal: "" };
+  }
+  const text = [];
+  const refusals = [];
+  for (const item of Array.isArray(result?.output) ? result.output : []) {
+    if (item?.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const part of item.content) {
+      if (part?.type === "output_text" && typeof part.text === "string") {
+        text.push(part.text);
+      }
+      if (part?.type === "refusal" && typeof part.refusal === "string") {
+        refusals.push(part.refusal);
+      }
+    }
+  }
+  return {
+    text: text.join("\n").trim(),
+    refusal: refusals.join("\n").trim(),
+  };
+}
+
+function incompleteOutput(providerName) {
+  return new ProviderError(
+    "invalid_provider_response",
+    `${providerName} returned an incomplete response.`,
+  );
+}
+
+function invalidFinish(providerName) {
+  return new ProviderError(
+    "invalid_provider_response",
+    `${providerName} did not report a successful completion.`,
+  );
+}
+
+function assertResponsesCompleted(result) {
+  if (result?.status === "incomplete" || result?.incomplete_details != null) {
+    throw incompleteOutput("The OpenAI Responses API");
+  }
+  if (result?.status !== "completed") {
+    throw invalidFinish("The OpenAI Responses API");
+  }
+}
+
+function assertChatCompletionFinished(choice) {
+  if (choice?.finish_reason === "content_filter") {
+    throw new ProviderError(
+      "provider_refusal",
+      "The OpenAI-compatible provider filtered this response.",
+      { status: 422 },
+    );
+  }
+  if (choice?.finish_reason === "length") {
+    throw incompleteOutput("The OpenAI-compatible provider");
+  }
+  if (choice?.finish_reason !== "stop") {
+    throw invalidFinish("The OpenAI-compatible provider");
+  }
+}
+
+function assertAnthropicMessageFinished(result) {
+  if (result?.stop_reason === "refusal") {
+    throw new ProviderError("provider_refusal", "Anthropic declined this request.", {
+      status: 422,
+    });
+  }
+  if (
+    ["max_tokens", "model_context_window_exceeded", "pause_turn"].includes(
+      result?.stop_reason,
+    )
+  ) {
+    throw incompleteOutput("Anthropic");
+  }
+  if (!["end_turn", "stop_sequence"].includes(result?.stop_reason)) {
+    throw invalidFinish("Anthropic");
+  }
+}
+
 class OpenAICompatibleProvider {
   constructor(env, runtime) {
     if (!env.OPENAI_API_KEY) {
@@ -296,17 +562,98 @@ class OpenAICompatibleProvider {
       env.OPENAI_BASE_URL,
       "https://api.openai.com/v1",
     );
+    this.apiMode = runtime.providers.openai.apiMode;
+    this.reasoningEffort = runtime.providers.openai.reasoningEffort;
     this.timeoutMs = runtime.requestTimeoutMs;
   }
 
   async complete(request) {
+    return this.apiMode === "responses"
+      ? this.completeWithResponses(request)
+      : this.completeWithChatCompletions(request);
+  }
+
+  async completeWithResponses(request) {
+    const appliedReasoningEffort = reasoningEffortForModel(
+      request.model,
+      this.reasoningEffort,
+    );
+    const body = {
+      model: request.model,
+      input: request.messages,
+      max_output_tokens: request.maxOutputTokens,
+      store: false,
+    };
+    if (appliedReasoningEffort) {
+      body.reasoning = { effort: appliedReasoningEffort };
+    }
+    if (request.responseFormat?.kind === "json_schema") {
+      body.text = {
+        format: {
+          type: "json_schema",
+          name: "nirvana_telemetry_assessment",
+          strict: true,
+          schema: request.responseFormat.schema,
+        },
+      };
+    } else if (request.responseFormat?.kind === "json_object") {
+      body.text = { format: { type: "json_object" } };
+    }
+
+    const result = await postJson(
+      `${this.baseUrl}/responses`,
+      { authorization: `Bearer ${this.apiKey}` },
+      body,
+      this.timeoutMs,
+      "OpenAI Responses API",
+    );
+    assertResponsesCompleted(result);
+    const output = responsesText(result);
+    if (!output.text && output.refusal) {
+      throw new ProviderError("provider_refusal", "OpenAI declined this request.", {
+        status: 422,
+      });
+    }
+    if (!output.text) {
+      throw new ProviderError(
+        "invalid_provider_response",
+        "The OpenAI Responses API returned no text.",
+      );
+    }
+    return {
+      text: output.text,
+      transport: "responses",
+      responseId: result.id,
+      resolvedModel: result.model,
+      reasoningEffort: appliedReasoningEffort,
+      usage: result.usage
+        ? {
+            inputTokens: result.usage.input_tokens ?? null,
+            outputTokens: result.usage.output_tokens ?? null,
+          }
+        : undefined,
+    };
+  }
+
+  async completeWithChatCompletions(request) {
+    const appliedReasoningEffort = reasoningEffortForModel(
+      request.model,
+      this.reasoningEffort,
+    );
     const body = {
       model: request.model,
       messages: request.messages,
-      max_tokens: request.maxOutputTokens,
       store: false,
     };
-    if (Number.isFinite(request.temperature)) body.temperature = request.temperature;
+    if (isReasoningModel(request.model)) {
+      body.max_completion_tokens = request.maxOutputTokens;
+      if (appliedReasoningEffort) {
+        body.reasoning_effort = appliedReasoningEffort;
+      }
+    } else {
+      body.max_tokens = request.maxOutputTokens;
+      if (Number.isFinite(request.temperature)) body.temperature = request.temperature;
+    }
     if (request.responseFormat?.kind === "json_schema") {
       body.response_format = {
         type: "json_schema",
@@ -327,7 +674,9 @@ class OpenAICompatibleProvider {
       this.timeoutMs,
       "OpenAI-compatible provider",
     );
-    const text = contentToText(result?.choices?.[0]?.message?.content).trim();
+    const choice = result?.choices?.[0];
+    assertChatCompletionFinished(choice);
+    const text = contentToText(choice?.message?.content).trim();
     if (!text) {
       throw new ProviderError(
         "invalid_provider_response",
@@ -336,6 +685,10 @@ class OpenAICompatibleProvider {
     }
     return {
       text,
+      transport: "chat_completions",
+      responseId: result.id,
+      resolvedModel: result.model,
+      reasoningEffort: appliedReasoningEffort,
       usage: result.usage
         ? {
             inputTokens: result.usage.prompt_tokens ?? null,
@@ -389,8 +742,15 @@ class AnthropicProvider {
       messages: converted.messages,
     };
     if (converted.system) body.system = converted.system;
-    if (Number.isFinite(request.temperature)) {
-      body.temperature = clamp01(request.temperature);
+    // Current Anthropic reasoning models reject non-default temperature.
+    // Omit it across the curated catalog to keep one compatible request path.
+    if (request.responseFormat?.kind === "json_schema") {
+      body.output_config = {
+        format: {
+          type: "json_schema",
+          schema: request.responseFormat.schema,
+        },
+      };
     }
 
     const result = await postJson(
@@ -403,6 +763,7 @@ class AnthropicProvider {
       this.timeoutMs,
       "Anthropic",
     );
+    assertAnthropicMessageFinished(result);
     const text = contentToText(result?.content).trim();
     if (!text) {
       throw new ProviderError(
@@ -412,6 +773,9 @@ class AnthropicProvider {
     }
     return {
       text,
+      transport: "messages",
+      responseId: result.id,
+      resolvedModel: result.model,
       usage: result.usage
         ? {
             inputTokens: result.usage.input_tokens ?? null,
@@ -547,11 +911,15 @@ class MockProvider {
             request.metadata.mode,
           ),
         ),
+        transport: "mock",
+        resolvedModel: request.model,
         usage: { inputTokens: 0, outputTokens: 0 },
       };
     }
     return {
       text: deterministicMockResponse(request.messages),
+      transport: "mock",
+      resolvedModel: request.model,
       usage: { inputTokens: 0, outputTokens: 0 },
     };
   }

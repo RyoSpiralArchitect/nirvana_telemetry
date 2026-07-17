@@ -9,11 +9,13 @@ import type {
 
 export class ApiError extends Error {
   status: number;
+  code: string;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code = "api_error") {
     super(message);
     this.name = "ApiError";
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -27,11 +29,13 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   const payload = (await response.json().catch(() => ({}))) as {
     error?: string;
+    code?: string;
   };
   if (!response.ok) {
     throw new ApiError(
       payload.error ?? `Request failed with status ${response.status}.`,
       response.status,
+      payload.code,
     );
   }
   return payload as T;

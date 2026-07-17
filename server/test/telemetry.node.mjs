@@ -152,8 +152,13 @@ test("public config reports availability without exposing credentials or URLs", 
   };
   const serialized = JSON.stringify(getPublicConfig(env));
   const providers = getPublicConfig(env).providers;
-  assert.equal(providers.find((provider) => provider.id === "openai").available, true);
-  assert.equal(providers.find((provider) => provider.id === "anthropic").available, true);
+  const openai = providers.find((provider) => provider.id === "openai");
+  const anthropic = providers.find((provider) => provider.id === "anthropic");
+  assert.equal(openai.available, true);
+  assert.ok(openai.models.includes("gpt-5.6-sol"));
+  assert.equal(openai.modelOptions[0].transport, "chat_completions");
+  assert.equal(anthropic.available, true);
+  assert.ok(anthropic.models.includes("claude-sonnet-5"));
   assert.equal(serialized.includes("ultra-secret"), false);
   assert.equal(serialized.includes("private.example"), false);
   assert.equal(serialized.includes("anthropic-secret"), false);

@@ -2,6 +2,7 @@ import { ChevronDown, Download, Info, Plus, X } from "lucide-react";
 import { useRef } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { ModelPicker } from "./ModelPicker";
 import type {
   AppConfig,
   ExperimentSettings,
@@ -125,21 +126,14 @@ export function ExperimentRail({
           </select>
           <FieldChevron />
         </div>
-        <label className="sr-only" htmlFor="target-model">
-          Target model
-        </label>
-        <input
+        <ModelPicker
           id="target-model"
-          className="model-input"
+          label="Target model"
           value={settings.targetModel}
-          list="target-models"
-          onChange={(event) => update("targetModel", event.target.value)}
-          autoComplete="off"
-          aria-describedby="target-availability"
+          provider={provider}
+          describedBy="target-availability"
+          onChange={(model) => update("targetModel", model)}
         />
-        <datalist id="target-models">
-          {provider?.models?.map((model) => <option key={model} value={model} />)}
-        </datalist>
         <p id="target-availability" className="availability-line">
           <span className={provider?.available ? "available" : "unavailable"} />
           {provider?.available
@@ -207,22 +201,13 @@ export function ExperimentRail({
             </select>
             <FieldChevron />
           </div>
-          <label className="sr-only" htmlFor="judge-model">
-            Judge model
-          </label>
-          <input
+          <ModelPicker
             id="judge-model"
-            className="model-input"
+            label="Judge model"
             value={settings.judgeModel}
-            list="judge-models"
-            onChange={(event) => update("judgeModel", event.target.value)}
-            autoComplete="off"
+            provider={judgeProvider}
+            onChange={(model) => update("judgeModel", model)}
           />
-          <datalist id="judge-models">
-            {judgeProvider?.models?.map((model) => (
-              <option key={model} value={model} />
-            ))}
-          </datalist>
           {settings.targetProvider === settings.judgeProvider &&
           settings.targetModel === settings.judgeModel ? (
             <p className="warning-line">

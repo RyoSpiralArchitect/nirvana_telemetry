@@ -49,6 +49,18 @@ An unobservable dimension is returned as `null` and holds its previous value. Th
 
 You can switch modes between turns without silently rescoring prior history. Turning off **Feed state into next turn** creates a simple no-feedback control condition.
 
+## Model catalog
+
+The model fields remain editable, while the interface exposes curated presets for faster target/judge setup. Availability still depends on the provider account and exact model ID accepted at run time.
+
+| Provider | Default model | Curated presets |
+| --- | --- | --- |
+| Deterministic mock | `nirvana-mock-v1` | Mock target and separate mock judge |
+| OpenAI | `gpt-5.6-terra` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5-nano`, `gpt-4.1-mini`, `gpt-4o-mini` |
+| Anthropic | `claude-sonnet-5` | `claude-sonnet-5`, `claude-opus-4-8`, `claude-haiku-4-5-20251001`, `claude-fable-5`, `claude-sonnet-4-6` |
+
+The application still starts in credential-free mock mode unless `NIRVANA_TARGET_PROVIDER` is explicitly set, so merely having a provider key never initiates a paid request.
+
 ## Run locally
 
 Requirements: Node.js 20.19 or newer.
@@ -70,6 +82,8 @@ npm run dev
 
 The app still opens in mock mode so a credential never triggers a paid request by itself. Select the hosted provider in the interface, or set `NIRVANA_TARGET_PROVIDER` explicitly. OpenAI- and Anthropic-compatible gateways can set their base URLs. Additional model, timeout, origin, and port settings are documented in [.env.example](.env.example).
 
+For the official `api.openai.com/v1` endpoint, OpenAI calls automatically use the Responses API. A custom `OPENAI_BASE_URL` defaults to Chat Completions for compatibility. Override that selection with `OPENAI_API_MODE=responses` or `OPENAI_API_MODE=chat_completions`; reasoning models use `OPENAI_REASONING_EFFORT` (`none`, `low`, `medium`, `high`, `xhigh`, or `max`, with `medium` as the default), and values unsupported by the selected model are omitted rather than sent blindly. `OPENAI_MODEL` and `ANTHROPIC_MODEL` change each provider's default preset.
+
 For a production-style local build:
 
 ```bash
@@ -90,11 +104,17 @@ The production server serves the built UI and API at [http://127.0.0.1:4173](htt
 
 The opening conversation is a clearly marked demonstration trace. It is discarded before the first real prompt, which starts from a neutral state. Long visible sessions stay in the interface and export while provider calls use a bounded recent-context window.
 
+Exports use the `nirvana-run-v2` schema. Every successful trace snapshots that turn's complete settings and input telemetry, then retains the requested and resolved model, provider transport, latency, token usage, structured-output fallback state, and provider response ID when available. The export also records its execution policy, phase, and any in-flight attempt. The `failures` array preserves answer- versus assessment-stage failures—including explicit user stops—with an error code, start time, scheduled model roles, and completed target-call metadata when assessment failed. Incomplete turns therefore remain diagnosable instead of looking like empty successful runs; failure records never invent a telemetry update.
+
+## Experiment protocol
+
+The pilot protocol defines external-judge feedback, self feedback, and no-feedback control conditions; frozen three-turn tasks; independent ground truth; blocked randomization; stopping rules; and a 48-episode executable pilot. See [Experiment Protocol v1](docs/EXPERIMENT_PROTOCOL.md) before comparing models or interpreting telemetry trajectories.
+
 ## Providers and safety boundary
 
 - **Deterministic mock:** local, credential-free, and useful for UI development.
-- **OpenAI / compatible:** Chat Completions with JSON Schema assessment output and one `json_object` compatibility fallback.
-- **Anthropic:** Messages API with local assessment validation.
+- **OpenAI / compatible:** Responses API for the official endpoint, Chat Completions for custom gateways by default, structured assessment output, and one JSON-object compatibility fallback.
+- **Anthropic:** Messages API with structured assessment output and local validation.
 
 Provider keys remain on the Node server and are never returned to the browser. JSON-only and same-origin checks protect the local API from unrelated web pages, requests are bounded, upstream errors are sanitized, OpenAI storage is disabled with `store: false`, and candidate answers are treated as untrusted quoted data inside evaluator prompts.
 
@@ -114,6 +134,7 @@ The interface has also been checked against the design concept at 1536×1024, at
 - A judge model is not a truth oracle. Use independent ground truth or task-specific evaluation to measure accuracy.
 - Do not compare runs across rubric, model, temperature, or prompt-version changes without recording those changes.
 - Evidence notes are short observable justifications, never a request for hidden chain-of-thought.
-- A stronger study adds a third no-telemetry condition and uses an evaluator independent from both the target and the telemetry judge.
+- The built-in no-feedback arm still includes an explicit control-condition note in the system prompt; it is a practical control, not a perfectly inert baseline.
+- A stronger study uses ground truth and outcome evaluators independent from both the target and the telemetry judge.
 
 The original visual direction and implementation tokens live in [design/DESIGN_SPEC.md](design/DESIGN_SPEC.md). Contributions, experiments, and appropriately skeptical issue reports are welcome. 🕉️

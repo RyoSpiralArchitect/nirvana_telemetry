@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { getConfig, requestAnswer, requestAssessment } from "./api";
+import { ApiError, getConfig, requestAnswer, requestAssessment } from "./api";
 import { boundConversationContext } from "./context";
 import { AppHeader } from "./components/AppHeader";
 import { Conversation } from "./components/Conversation";
@@ -14,6 +14,8 @@ import type {
   AppConfig,
   ExperimentSettings,
   Message,
+  RunAttempt,
+  RunFailure,
   RunPhase,
   TelemetryAssessment,
   TelemetrySnapshot,
@@ -28,25 +30,125 @@ const FALLBACK_CONFIG: AppConfig = {
       available: true,
       defaultModel: "nirvana-mock-v1",
       models: ["nirvana-mock-v1", "nirvana-mock-judge-v1"],
+      modelOptions: [
+        {
+          id: "nirvana-mock-v1",
+          label: "Mock target",
+          role: "Deterministic",
+          transport: "mock",
+          featured: false,
+        },
+        {
+          id: "nirvana-mock-judge-v1",
+          label: "Mock judge",
+          role: "Deterministic",
+          transport: "mock",
+          featured: false,
+        },
+      ],
       detail: "Local simulated data",
     },
     {
       id: "openai",
       label: "OpenAI / compatible",
       available: false,
-      defaultModel: "gpt-4o-mini",
-      models: ["gpt-4o-mini", "gpt-4.1-mini", "gpt-5-mini"],
+      defaultModel: "gpt-5.6-terra",
+      models: [
+        "gpt-5.6-sol",
+        "gpt-5.6-terra",
+        "gpt-5.6-luna",
+        "gpt-5-nano",
+        "gpt-4.1-mini",
+        "gpt-4o-mini",
+      ],
+      modelOptions: [
+        {
+          id: "gpt-5.6-sol",
+          label: "5.6 Sol",
+          role: "Frontier quality",
+          transport: "responses",
+          featured: true,
+        },
+        {
+          id: "gpt-5.6-terra",
+          label: "5.6 Terra",
+          role: "Balanced",
+          transport: "responses",
+          featured: true,
+        },
+        {
+          id: "gpt-5.6-luna",
+          label: "5.6 Luna",
+          role: "Fast volume",
+          transport: "responses",
+          featured: true,
+        },
+      ],
       detail: "Server credential not detected",
     },
     {
       id: "anthropic",
       label: "Anthropic",
       available: false,
-      defaultModel: "claude-sonnet-4-20250514",
-      models: ["claude-sonnet-4-20250514"],
+      defaultModel: "claude-sonnet-5",
+      models: [
+        "claude-sonnet-5",
+        "claude-opus-4-8",
+        "claude-haiku-4-5-20251001",
+        "claude-fable-5",
+        "claude-sonnet-4-6",
+      ],
+      modelOptions: [
+        {
+          id: "claude-sonnet-5",
+          label: "Sonnet 5",
+          role: "Balanced",
+          transport: "messages",
+          featured: true,
+        },
+        {
+          id: "claude-opus-4-8",
+          label: "Opus 4.8",
+          role: "Complex judge",
+          transport: "messages",
+          featured: true,
+        },
+        {
+          id: "claude-haiku-4-5-20251001",
+          label: "Haiku 4.5",
+          role: "Fast volume",
+          transport: "messages",
+          featured: true,
+        },
+        {
+          id: "claude-fable-5",
+          label: "Fable 5",
+          role: "Stress test",
+          transport: "messages",
+          featured: true,
+        },
+      ],
       detail: "Server credential not detected",
     },
   ],
+  execution: {
+    maxOutputTokens: 4096,
+    openai: {
+      apiMode: "responses",
+      reasoningEffort: "medium",
+    },
+    temperaturePolicy: {
+      responses: { kind: "omitted" },
+      chat_completions: {
+        kind: "request_value",
+        answer: 0.4,
+        assessment: 0,
+        reasoningModels: "omitted",
+      },
+      messages: { kind: "omitted" },
+      mock: { kind: "deterministic" },
+    },
+  },
   defaults: {
     targetProvider: "mock",
     targetModel: "nirvana-mock-v1",
@@ -136,6 +238,7 @@ export default function App() {
   const [messages, setMessages] = useState<Message[]>(SAMPLE_MESSAGES);
   const [snapshots, setSnapshots] = useState<TelemetrySnapshot[]>([sampleSnapshot()]);
   const [traces, setTraces] = useState<TurnTrace[]>([]);
+  const [failures, setFailures] = useState<RunFailure[]>([]);
   const [showingSample, setShowingSample] = useState(true);
   const [contextTrimmed, setContextTrimmed] = useState(false);
   const [draft, setDraft] = useState("");
@@ -144,6 +247,8 @@ export default function App() {
   const [experimentOpen, setExperimentOpen] = useState(false);
   const [telemetryOpen, setTelemetryOpen] = useState(false);
   const activeRequest = useRef<AbortController | null>(null);
+  const activeAttempt = useRef<RunAttempt | null>(null);
+  const sessionEpoch = useRef(0);
   const hasAdoptedServerDefaults = useRef(false);
 
   useEffect(() => {
@@ -194,6 +299,7 @@ export default function App() {
 
     const controller = new AbortController();
     activeRequest.current = controller;
+    const runEpoch = sessionEpoch.current;
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
@@ -205,6 +311,27 @@ export default function App() {
     const turnMessages = [...baseMessages, userMessage];
     const providerContext = boundConversationContext(turnMessages);
     const turn = turnMessages.filter((message) => message.role === "user").length;
+    const attempt: RunAttempt = {
+      id: crypto.randomUUID(),
+      turn,
+      stage: "answer",
+      settings: { ...settings },
+      inputTelemetry: { ...baseTelemetry },
+      target: {
+        provider: settings.targetProvider,
+        model: settings.targetModel,
+      },
+      evaluator: {
+        provider:
+          settings.mode === "self"
+            ? settings.targetProvider
+            : settings.judgeProvider,
+        model:
+          settings.mode === "self" ? settings.targetModel : settings.judgeModel,
+      },
+      startedAt: new Date().toISOString(),
+    };
+    activeAttempt.current = attempt;
     if (showingSample) {
       setSnapshots([createSnapshot(NEUTRAL_TELEMETRY, "initial", 0)]);
       setTraces([]);
@@ -215,6 +342,7 @@ export default function App() {
     setDraft("");
     setError(null);
     setPhase("answering");
+    let runStage: RunFailure["stage"] = "answer";
 
     try {
       const answer = await requestAnswer({
@@ -229,10 +357,23 @@ export default function App() {
         role: "assistant",
         content: answer.answer,
         createdAt: new Date().toISOString(),
-        model: answer.model,
+        model: answer.resolvedModel ?? answer.model,
       };
       setMessages((current) => [...current, assistantMessage]);
       setPhase("assessing");
+      runStage = "assessment";
+      activeAttempt.current = {
+        ...attempt,
+        stage: "assessment",
+        targetResponse: {
+          resolvedModel: answer.resolvedModel,
+          transport: answer.transport,
+          reasoningEffort: answer.reasoningEffort,
+          responseId: answer.responseId,
+          latencyMs: answer.latencyMs,
+          usage: answer.usage,
+        },
+      };
 
       const assessment = await requestAssessment({
         settings,
@@ -254,7 +395,8 @@ export default function App() {
         turn,
         values: assessment.telemetry,
         source: settings.mode,
-        evaluatorModel: assessment.evaluator.model,
+        evaluatorModel:
+          assessment.evaluator.resolvedModel ?? assessment.evaluator.model,
         assessment: { ...assessment.assessment, id: assessmentId },
         createdAt: new Date().toISOString(),
       };
@@ -265,13 +407,26 @@ export default function App() {
           id: crypto.randomUUID(),
           turn,
           mode: settings.mode,
+          settings: { ...settings },
+          inputTelemetry: { ...baseTelemetry },
           target: {
             provider: settings.targetProvider,
             model: settings.targetModel,
+            resolvedModel: answer.resolvedModel,
+            transport: answer.transport,
+            reasoningEffort: answer.reasoningEffort,
+            responseId: answer.responseId,
+            usage: answer.usage,
           },
           evaluator: {
             provider: assessment.evaluator.provider,
             model: assessment.evaluator.model,
+            resolvedModel: assessment.evaluator.resolvedModel,
+            transport: assessment.evaluator.transport,
+            reasoningEffort: assessment.evaluator.reasoningEffort,
+            responseId: assessment.evaluator.responseId,
+            usage: assessment.usage,
+            fallbackUsed: assessment.fallbackUsed,
           },
           answerLatencyMs: answer.latencyMs,
           assessmentLatencyMs: assessment.latencyMs,
@@ -281,21 +436,46 @@ export default function App() {
       setPhase("idle");
       setTelemetryOpen(window.innerWidth < 768);
     } catch (caught) {
-      if (caught instanceof DOMException && caught.name === "AbortError") {
+      if (runEpoch !== sessionEpoch.current) return;
+      const aborted = caught instanceof DOMException && caught.name === "AbortError";
+      const message =
+        aborted
+          ? "The run was stopped before the current stage completed."
+          : caught instanceof Error
+            ? caught.message
+            : "The run could not be completed.";
+      const attemptAtFailure =
+        activeAttempt.current?.id === attempt.id
+          ? activeAttempt.current
+          : { ...attempt, stage: runStage };
+      setFailures((current) => [
+        ...current,
+        {
+          ...attemptAtFailure,
+          stage: runStage,
+          code: aborted
+            ? "run_aborted"
+            : caught instanceof ApiError
+              ? caught.code
+              : "client_error",
+          message,
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      if (aborted) {
         setPhase("idle");
-        return;
+      } else {
+        setError(message);
+        setPhase("error");
       }
-      setError(caught instanceof Error ? caught.message : "The run could not be completed.");
-      setPhase("error");
     } finally {
-      activeRequest.current = null;
+      if (activeRequest.current === controller) activeRequest.current = null;
+      if (activeAttempt.current?.id === attempt.id) activeAttempt.current = null;
     }
   };
 
   const stop = () => {
     activeRequest.current?.abort();
-    activeRequest.current = null;
-    setPhase("idle");
   };
 
   const newSession = () => {
@@ -306,10 +486,15 @@ export default function App() {
     ) {
       return false;
     }
-    stop();
+    sessionEpoch.current += 1;
+    activeRequest.current?.abort();
+    activeRequest.current = null;
+    activeAttempt.current = null;
+    setPhase("idle");
     setMessages([]);
     setSnapshots([createSnapshot(NEUTRAL_TELEMETRY, "initial", 0)]);
     setTraces([]);
+    setFailures([]);
     setShowingSample(false);
     setContextTrimmed(false);
     setError(null);
@@ -320,15 +505,20 @@ export default function App() {
   const exportRun = () => {
     const payload = {
       name: "Nirvana Telemetry experiment",
+      schemaVersion: "nirvana-run-v2",
       exportedAt: new Date().toISOString(),
       rubricVersion: "nirvana-v1",
       caveat:
         "Behavioral telemetry is an intervention and heuristic, not evidence of correctness or hidden mental state.",
+      execution: config.execution,
+      phaseAtExport: phase,
+      activeAttempt: activeAttempt.current,
       demo: showingSample,
       settings,
       messages,
       telemetry: snapshots,
       traces,
+      failures,
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",

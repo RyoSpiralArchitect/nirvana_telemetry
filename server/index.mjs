@@ -206,6 +206,10 @@ async function runResponse(body, env) {
     answer,
     provider: request.target.provider,
     model: request.target.model,
+    resolvedModel: completion.resolvedModel,
+    transport: completion.transport,
+    reasoningEffort: completion.reasoningEffort,
+    responseId: completion.responseId,
     target: request.target,
     usage: safeUsage(completion.usage),
     latencyMs: Math.max(0, Math.round(performance.now() - startedAt)),
@@ -225,7 +229,7 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
     model: evaluator.model,
     messages: buildAssessmentMessages(request),
     temperature: 0,
-    maxOutputTokens: Math.min(runtime.maxOutputTokens, 1_600),
+    maxOutputTokens: Math.min(runtime.maxOutputTokens, 4_096),
     metadata: {
       purpose: "assessment",
       candidateAnswer: request.candidateAnswer,
@@ -246,6 +250,10 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
     return {
       assessment: normalizeAssessment(completion.text),
       usage: completion.usage,
+      transport: completion.transport,
+      reasoningEffort: completion.reasoningEffort,
+      responseId: completion.responseId,
+      resolvedModel: completion.resolvedModel,
       fallbackUsed,
     };
   } catch (error) {
@@ -273,6 +281,10 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
     return {
       assessment: normalizeAssessment(completion.text),
       usage: completion.usage,
+      transport: completion.transport,
+      reasoningEffort: completion.reasoningEffort,
+      responseId: completion.responseId,
+      resolvedModel: completion.resolvedModel,
       fallbackUsed,
     };
   } catch (cause) {
@@ -295,7 +307,14 @@ async function runAssessment(body, env) {
 
   return {
     mode: request.mode,
-    evaluator: { ...evaluator, source: request.mode },
+    evaluator: {
+      ...evaluator,
+      source: request.mode,
+      resolvedModel: result.resolvedModel,
+      transport: result.transport,
+      reasoningEffort: result.reasoningEffort,
+      responseId: result.responseId,
+    },
     assessment: result.assessment,
     previousTelemetry: request.previousTelemetry,
     telemetry,
