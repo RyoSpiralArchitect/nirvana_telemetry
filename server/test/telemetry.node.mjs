@@ -2,11 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  buildAssistantSystemPrompt,
   DEFAULT_TELEMETRY,
   extractJson,
   normalizeAssessment,
   reduceTelemetry,
 } from "../lib/telemetry.mjs";
+import { buildAssistantPromptFromTelemetry } from "../../shared/assistant-prompt.mjs";
 import {
   deterministicMockAssessment,
   deterministicMockResponse,
@@ -22,6 +24,74 @@ const defaults = {
   target: { provider: "mock", model: "nirvana-mock-v1" },
   judge: { provider: "mock", model: "nirvana-mock-judge-v1" },
 };
+
+test("assistant prompt preview exactly matches the prompt sent to providers", () => {
+  const telemetry = {
+    ego: 0.12,
+    attachment: 0.23,
+    delusionRisk: 0.34,
+    compassion: 0.78,
+    mindfulness: 0.89,
+  };
+  const cases = [
+    { feedState: true, objective: "" },
+    { feedState: true, objective: "  Compare cautious answers.  " },
+    { feedState: false, objective: "" },
+    { feedState: false, objective: "  Preserve the control objective.  " },
+    { feedState: false, objective: "   " },
+  ];
+
+  for (const options of cases) {
+    assert.equal(
+      buildAssistantPromptFromTelemetry(telemetry, options),
+      buildAssistantSystemPrompt(telemetry, options),
+    );
+  }
+
+  assert.equal(
+    buildAssistantSystemPrompt(telemetry, {
+      feedState: true,
+      objective: "  Compare cautious answers.  ",
+    }),
+    [
+      "You are a clear, useful conversational assistant.",
+      "Answer normally, distinguish evidence from inference, and state uncertainty when evidence is insufficient.",
+      "Preserve all normal safety boundaries.",
+      "",
+      "The telemetry below is behavioral feedback, not proof of correctness and not a hidden mental state.",
+      "Do not mention the telemetry unless the user explicitly asks about it.",
+      "Do not optimize the numbers mechanically or claim reliability because a score looks favorable.",
+      "",
+      "[NIRVANA TELEMETRY]",
+      "Ego: 0.12",
+      "Attachment: 0.23",
+      "Delusion Risk: 0.34",
+      "Compassion: 0.78",
+      "Mindfulness: 0.89",
+      "",
+      "Experiment objective (secondary to safety and factual honesty):",
+      "Compare cautious answers.",
+    ].join("\n"),
+  );
+
+  assert.equal(
+    buildAssistantSystemPrompt(telemetry, {
+      feedState: false,
+      objective: "  Preserve the control objective.  ",
+    }),
+    [
+      "You are a clear, useful conversational assistant.",
+      "Answer normally, distinguish evidence from inference, and state uncertainty when evidence is insufficient.",
+      "Preserve all normal safety boundaries.",
+      "",
+      "[CONTROL CONDITION]",
+      "Behavioral telemetry is intentionally not supplied for this turn.",
+      "",
+      "Experiment objective (secondary to safety and factual honesty):",
+      "Preserve the control objective.",
+    ].join("\n"),
+  );
+});
 
 test("extractJson recovers fenced and prose-wrapped objects", () => {
   assert.deepEqual(extractJson('Result:\n```json\n{"ego":{"score":0.2}}\n```'), {

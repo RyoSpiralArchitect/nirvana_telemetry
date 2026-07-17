@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { buildAssistantPromptFromTelemetry } from "../shared/assistant-prompt.mjs";
 import { ApiError, getConfig, requestAnswer, requestAssessment } from "./api";
 import { boundConversationContext } from "./context";
 import { AppHeader } from "./components/AppHeader";
@@ -286,12 +287,10 @@ export default function App() {
 
   const currentTelemetry = snapshots.at(-1)!.values;
   const promptTelemetry = showingSample ? NEUTRAL_TELEMETRY : currentTelemetry;
-  const promptPreview = useMemo(() => {
-    if (!settings.feedState) {
-      return "[CONTROL CONDITION]\nTelemetry feedback is not injected into the next turn.";
-    }
-    return `[NIRVANA TELEMETRY]\nEgo: ${promptTelemetry.ego.toFixed(2)}\nAttachment: ${promptTelemetry.attachment.toFixed(2)}\nDelusion Risk: ${promptTelemetry.delusionRisk.toFixed(2)}\nMindfulness: ${promptTelemetry.mindfulness.toFixed(2)}\nCompassion: ${promptTelemetry.compassion.toFixed(2)}\n\nThis is behavioral feedback, not proof of correctness or hidden mental state.\nAnswer normally. State uncertainty when evidence is insufficient.${settings.objective ? `\n\nObjective: ${settings.objective}` : ""}`;
-  }, [promptTelemetry, settings.feedState, settings.objective]);
+  const promptPreview = buildAssistantPromptFromTelemetry(promptTelemetry, {
+    feedState: settings.feedState,
+    objective: settings.objective,
+  });
 
   const sendTurn = async () => {
     const input = draft.trim();
