@@ -1,0 +1,42 @@
+{
+  "name": "nirvana-telemetry",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A behavioral observability experiment for self- and judge-updated LLM telemetry.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RyoSpiralArchitect/nirvana_telemetry.git"
+  },
+  "keywords": [
+    "llm",
+    "evaluation",
+    "observability",
+    "prompt-intervention"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "tsc --noEmit && vite build",
+    "start": "node server/index.mjs",
+    "test": "node --test server/test/*.node.mjs && vitest run",
+    "check": "npm run test && npm run build"
+  },
+  "dependencies": {
+    "lucide-react": "^0.525.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@vitejs/plugin-react": "^4.6.0",
+    "typescript": "^5.8.3",
+    "vite": "^7.0.0",
+    "vitest": "^3.2.4"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}
