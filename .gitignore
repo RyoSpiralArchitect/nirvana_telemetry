@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+*.log
+
+# Local ChatGPT project mirror metadata and synced references.
+AGENTS.md
+sources/
