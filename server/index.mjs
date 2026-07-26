@@ -4,15 +4,16 @@ import { extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  ASSESSMENT_JSON_SCHEMA,
+  buildAssessmentJsonSchema,
+  DEFAULT_RUBRIC_VERSION,
   DEFAULT_TELEMETRY,
   EMA_OBSERVATION_WEIGHT,
   EMA_PREVIOUS_WEIGHT,
-  RUBRIC_VERSION,
+  RUBRIC_VERSIONS,
   TELEMETRY_DIMENSIONS,
-  TELEMETRY_RUBRIC,
   buildAssessmentMessages,
   buildAssistantSystemPrompt,
+  getTelemetryRubric,
   normalizeAssessment,
   reduceTelemetry,
 } from "./lib/telemetry.mjs";
@@ -145,11 +146,24 @@ export async function readJsonBody(request, maxBytes = REQUEST_LIMITS.bodyBytes)
 }
 
 function publicConfigPayload(env) {
+  const rubrics = Object.fromEntries(
+    RUBRIC_VERSIONS.map((rubricVersion) => [
+      rubricVersion,
+      {
+        dimensions: TELEMETRY_DIMENSIONS.map((id) => ({
+          id,
+          ...getTelemetryRubric(rubricVersion)[id],
+        })),
+      },
+    ]),
+  );
   return {
     ...getPublicConfig(env),
     telemetry: {
-      rubricVersion: RUBRIC_VERSION,
-      dimensions: TELEMETRY_DIMENSIONS.map((id) => ({ id, ...TELEMETRY_RUBRIC[id] })),
+      rubricVersion: DEFAULT_RUBRIC_VERSION,
+      supportedRubricVersions: [...RUBRIC_VERSIONS],
+      dimensions: rubrics[DEFAULT_RUBRIC_VERSION].dimensions,
+      rubrics,
       initialValues: DEFAULT_TELEMETRY,
       reducer: {
         kind: "ema",
@@ -184,7 +198,7 @@ async function runResponse(body, env) {
       {
         role: "system",
         content: buildAssistantSystemPrompt(request.telemetry, {
-          feedState: request.feedState,
+          interventionMode: request.interventionMode,
           objective: request.objective,
         }),
       },
@@ -234,6 +248,8 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
       purpose: "assessment",
       candidateAnswer: request.candidateAnswer,
       mode: request.mode,
+      rubricVersion: request.rubricVersion,
+      messages: request.messages,
     },
   };
 
@@ -244,11 +260,11 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
       ...baseRequest,
       responseFormat: {
         kind: "json_schema",
-        schema: ASSESSMENT_JSON_SCHEMA,
+        schema: buildAssessmentJsonSchema(request.rubricVersion),
       },
     });
     return {
-      assessment: normalizeAssessment(completion.text),
+      assessment: normalizeAssessment(completion.text, request.rubricVersion),
       usage: completion.usage,
       transport: completion.transport,
       reasoningEffort: completion.reasoningEffort,
@@ -279,7 +295,7 @@ async function requestAssessment({ provider, request, evaluator, runtime }) {
   });
   try {
     return {
-      assessment: normalizeAssessment(completion.text),
+      assessment: normalizeAssessment(completion.text, request.rubricVersion),
       usage: completion.usage,
       transport: completion.transport,
       reasoningEffort: completion.reasoningEffort,

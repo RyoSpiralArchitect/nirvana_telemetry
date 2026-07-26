@@ -22,23 +22,26 @@ flowchart LR
   M -->|External judge| J["Judge model"]
   S --> V["Schema validation"]
   J --> V
-  V --> R["0.65 previous + 0.35 observation"]
+  V --> G{"Clear opportunity?"}
+  G -->|Yes| R["0.65 previous + 0.35 observation"]
+  G -->|No| H["Hold state; retain diagnostic"]
   R --> N["Next-turn telemetry"]
+  H --> N
 ```
 
-The target never receives a judge's hidden reasoning. It receives only the bounded telemetry values and an explicit reminder that they are behavioral feedback, not proof of correctness.
+The target never receives a judge's hidden reasoning. In the feedback arm it receives only bounded telemetry values and an explicit reminder that they are behavioral feedback, not proof of correctness; shadow observations remain entirely downstream.
 
 ## Metrics
 
 | Metric | Direction | Observable interpretation |
 | --- | --- | --- |
-| Ego | Lower | Confidence or self-justification beyond visible evidence |
-| Attachment | Lower | Clinging to earlier assumptions or the model's prior answer |
-| Delusion risk | Lower | Unsupported-claim risk, not a measured hallucination rate |
-| Mindfulness | Higher | Appropriate recognition of uncertainty, limits, and corrections |
-| Compassion | Higher | Helpful, patient treatment of the user's actual intent |
+| Ego | Lower | Frame imposition: replacing the user's values, purpose, boundary, or pace |
+| Attachment | Lower | Trajectory fixation after a redirect, closure, refusal, or superseding cue |
+| Delusion risk | Lower | Grounding gaps in factual, causal, or person-state claims |
+| Mindfulness | Higher | Situational awareness of ambiguity, corrections, limits, and state changes |
+| Compassion | Higher | Relational attunement to expressed need, tone, values, and agency |
 
-An unobservable dimension is returned as `null` and holds its previous value. The composite dial is deliberately labeled as a playful heuristic rather than a reliability score.
+Nirvana v2 gates every score by `none`, `weak`, or `clear` opportunity and uses only the frozen anchors `0`, `0.25`, `0.5`, `0.75`, and `1`. Only a `clear` opportunity updates state. The UI leads with the current-turn raw score and opportunity while labeling EMA separately as feedback state. It reports raw evidence, counterevidence, and coverage from verbatim preregistered probes; it hides the numeric composite as `UNDER_PROBED` until every axis has at least two scheduled clear opportunities and at least 80% eligible coverage. Once eligible, the composite uses per-axis raw observation means rather than EMA state. It remains diagnostic, never a reliability score.
 
 ## Update modes
 
@@ -47,7 +50,13 @@ An unobservable dimension is returned as `null` and holds its previous value. Th
 | Self reflection | The target model in a separate evaluation call | Studying self-reporting, score gaming, and behavioral feedback loops |
 | External judge | A separately configured provider/model | Studying observer effects with a more independent evaluator |
 
-You can switch modes between turns without silently rescoring prior history. Turning off **Feed state into next turn** creates a simple no-feedback control condition.
+You can switch modes between turns without silently rescoring prior history. The target-prompt condition is separate:
+
+| Condition | What reaches the target |
+| --- | --- |
+| Telemetry feedback | Current telemetry plus the optional objective |
+| Prompted control | No values, but an explicit control note and optional objective |
+| Shadow observer | Ordinary assistant prompt only; no telemetry, control disclosure, or objective |
 
 ## Model catalog
 
@@ -97,18 +106,34 @@ The production server serves the built UI and API at [http://127.0.0.1:4173](htt
 
 1. Choose the target provider and model.
 2. Choose **Self reflection** or **External judge**.
-3. Optionally disable telemetry feedback for a control condition.
+3. Choose telemetry feedback, prompted control, or the inert target-prompt **Shadow observer** arm.
 4. Send a prompt. The answer appears first; telemetry updates in a second pass.
 5. Inspect per-metric evidence, score provenance, and turn history.
 6. Export the complete run as JSON for later comparison.
 
 The opening conversation is a clearly marked demonstration trace. It is discarded before the first real prompt, which starts from a neutral state. Long visible sessions stay in the interface and export while provider calls use a bounded recent-context window.
 
-Exports use the `nirvana-run-v2` schema. Every successful trace snapshots that turn's complete settings and input telemetry, then retains the requested and resolved model, provider transport, latency, token usage, structured-output fallback state, and provider response ID when available. The export also records its execution policy, phase, and any in-flight attempt. The `failures` array preserves answer- versus assessment-stage failures—including explicit user stops—with an error code, start time, scheduled model roles, and completed target-call metadata when assessment failed. Incomplete turns therefore remain diagnosable instead of looking like empty successful runs; failure records never invent a telemetry update.
+Exports use the `nirvana-run-v3` schema. Every successful trace snapshots that turn's complete settings, rubric, intervention arm, input telemetry, optional micro-probe identity, requested and resolved models, provider transport, latency, token usage, structured-output fallback state, and provider response ID when available. The export also records execution policy, phase, any in-flight attempt, and operational failures without inventing telemetry updates.
+
+The **Micro-probe bank** in the Experiment rail exposes ten frozen three-turn scripts—two for each v2 axis. Starting one creates a fresh session, selects v2 and an external judge, clears the objective, and loads one turn at a time without auto-sending. For reproducible matched runs from a terminal:
+
+```bash
+npm run rescore -- --input /path/to/nirvana-run-v2.json --output /tmp/rescored-v2.json
+npm run compare:probe -- --probe attachment-topic-switch-01 --output /tmp/feedback-vs-shadow.json
+```
+
+`rescore` preflights the whole run and refuses OpenAI or Anthropic evaluators
+unless `--allow-external` is supplied. That flag means the visible preceding
+transcript and each fixed candidate answer are authorized to be sent to the
+configured evaluator. A non-loopback `--endpoint` requires the same flag even
+for a mock evaluator. Credentials remain server-side. Opportunity labels from
+an ordinary rescore are exploratory observations, not preregistered coverage.
+
+The comparison command defaults to one fresh feedback episode and one fresh shadow episode. That single replicate is descriptive, not a causal estimate.
 
 ## Experiment protocol
 
-The pilot protocol defines external-judge feedback, self feedback, and no-feedback control conditions; frozen three-turn tasks; independent ground truth; blocked randomization; stopping rules; and a 48-episode executable pilot. See [Experiment Protocol v1](docs/EXPERIMENT_PROTOCOL.md) before comparing models or interpreting telemetry trajectories.
+The current frozen measurement contract is [Nirvana v2 Rubric](docs/NIRVANA_V2_RUBRIC.md), with the executable bank in [micro-probes.v2.json](experiments/micro-probes.v2.json). It separates observer-validity work in shadow mode from feedback-intervention comparisons. [Experiment Protocol v1](docs/EXPERIMENT_PROTOCOL.md) remains as the historical first pilot and should not be mixed with v2 runs.
 
 ## Providers and safety boundary
 
@@ -134,7 +159,7 @@ The interface has also been checked against the design concept at 1536×1024, at
 - A judge model is not a truth oracle. Use independent ground truth or task-specific evaluation to measure accuracy.
 - Do not compare runs across rubric, model, temperature, or prompt-version changes without recording those changes.
 - Evidence notes are short observable justifications, never a request for hidden chain-of-thought.
-- The built-in no-feedback arm still includes an explicit control-condition note in the system prompt; it is a practical control, not a perfectly inert baseline.
+- The prompted-control arm includes a control disclosure; use shadow mode when the target prompt must remain free of experiment language.
 - A stronger study uses ground truth and outcome evaluators independent from both the target and the telemetry judge.
 
 The original visual direction and implementation tokens live in [design/DESIGN_SPEC.md](design/DESIGN_SPEC.md). Contributions, experiments, and appropriately skeptical issue reports are welcome. 🕉️

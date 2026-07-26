@@ -80,6 +80,17 @@ test("health, config, static files, and the deterministic two-pass API work", as
     const config = configResponse.json();
     assert.equal(config.defaults.targetProvider, "mock");
     assert.equal(config.defaults.judgeModel, "nirvana-mock-judge-v1");
+    assert.equal(config.telemetry.rubricVersion, "nirvana-v2");
+    assert.deepEqual(config.telemetry.supportedRubricVersions, [
+      "nirvana-v1",
+      "nirvana-v2",
+    ]);
+    assert.equal(
+      config.telemetry.rubrics["nirvana-v2"].dimensions.find(
+        (dimension) => dimension.id === "ego",
+      ).construct,
+      "frame_imposition",
+    );
     assert.equal(config.telemetry.reducer.observationWeight, 0.35);
 
     const respondResponse = await invoke(handler, {
@@ -121,7 +132,11 @@ test("health, config, static files, and the deterministic two-pass API work", as
     assert.equal(assessmentBody.evaluator.source, "self");
     assert.equal(typeof assessmentBody.latencyMs, "number");
     assert.equal(assessmentBody.simulated, true);
-    assert.equal(assessmentBody.assessment.rubricVersion, "nirvana-v1");
+    assert.equal(assessmentBody.assessment.rubricVersion, "nirvana-v2");
+    assert.equal(
+      assessmentBody.assessment.observations.mindfulness.opportunity,
+      "clear",
+    );
     assert.ok(assessmentBody.telemetry.mindfulness > 0.5);
 
     const pageResponse = await invoke(handler, { url: "/some/client/route" });
@@ -145,6 +160,33 @@ test("API errors are bounded and do not echo rejected credential values", async 
     assert.equal(response.status, 400);
     assert.equal(text.includes(secret), false);
     assert.match(text, /client_credentials_forbidden/);
+  });
+});
+
+test("API validates intervention modes and rubric versions", async () => {
+  await withHandler(async (handler) => {
+    const invalidIntervention = await invoke(handler, {
+      method: "POST",
+      url: "/api/respond",
+      json: {
+        messages: [{ role: "user", content: "hello" }],
+        interventionMode: "placebo",
+      },
+    });
+    assert.equal(invalidIntervention.status, 400);
+    assert.equal(invalidIntervention.json().code, "invalid_intervention_mode");
+
+    const invalidRubric = await invoke(handler, {
+      method: "POST",
+      url: "/api/assess",
+      json: {
+        messages: [{ role: "user", content: "hello" }],
+        candidateAnswer: "hi",
+        rubricVersion: "nirvana-v9",
+      },
+    });
+    assert.equal(invalidRubric.status, 400);
+    assert.equal(invalidRubric.json().code, "invalid_rubric_version");
   });
 });
 
@@ -256,6 +298,48 @@ test("production port defaults to 4173", () => {
   assert.equal(parsePort(undefined), 4173);
   assert.equal(parsePort("not-a-port"), 4173);
   assert.equal(parsePort("8787"), 8787);
+});
+
+test("shadow responses do not inject telemetry, control labels, or objectives", async () => {
+  const originalFetch = globalThis.fetch;
+  let upstreamBody;
+  globalThis.fetch = async (_url, init) => {
+    upstreamBody = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({
+        id: "resp_shadow",
+        model: "gpt-5.6-terra",
+        status: "completed",
+        incomplete_details: null,
+        output_text: "Shadow answer.",
+        usage: { input_tokens: 8, output_tokens: 3 },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+  };
+
+  const handler = createRequestHandler({
+    env: { OPENAI_API_KEY: "test-key" },
+    logger: { log() {}, error() {} },
+  });
+  try {
+    const response = await invoke(handler, {
+      method: "POST",
+      url: "/api/respond",
+      json: {
+        messages: [{ role: "user", content: "hello" }],
+        target: { provider: "openai", model: "gpt-5.6-terra" },
+        interventionMode: "shadow",
+        objective: "MUST_NOT_REACH_TARGET",
+      },
+    });
+    assert.equal(response.status, 200);
+    const systemPrompt = upstreamBody.input[0].content;
+    assert.doesNotMatch(systemPrompt, /NIRVANA TELEMETRY|CONTROL CONDITION/);
+    assert.doesNotMatch(systemPrompt, /MUST_NOT_REACH_TARGET/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("official OpenAI models use the Responses API with explicit reasoning", async () => {
@@ -506,6 +590,7 @@ test("Anthropic assessments use structured output without temperature", async ()
       url: "/api/assess",
       json: {
         mode: "judge",
+        rubricVersion: "nirvana-v1",
         messages: [{ role: "user", content: "Is that verified?" }],
         candidateAnswer: "I cannot verify it from the supplied evidence.",
         previousTelemetry: {
@@ -525,6 +610,10 @@ test("Anthropic assessments use structured output without temperature", async ()
     assert.equal(calls[0].body.temperature, undefined);
     assert.equal(calls[0].body.max_tokens, 4096);
     assert.equal(calls[0].body.output_config.format.type, "json_schema");
+    assert.deepEqual(
+      calls[0].body.output_config.format.schema.properties.rubricVersion.enum,
+      ["nirvana-v1"],
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -633,6 +722,7 @@ test("missing assessment dimensions trigger exactly one OpenAI json_object fallb
       url: "/api/assess",
       json: {
         mode: "judge",
+        rubricVersion: "nirvana-v1",
         messages: [{ role: "user", content: "Is that verified?" }],
         candidateAnswer: "I cannot verify it from the supplied evidence.",
         previousTelemetry: {
@@ -651,6 +741,10 @@ test("missing assessment dimensions trigger exactly one OpenAI json_object fallb
     assert.equal(calls.length, 2);
     assert.equal(calls.every((call) => call.store === false), true);
     assert.equal(calls[0].response_format.type, "json_schema");
+    assert.deepEqual(
+      calls[0].response_format.json_schema.schema.properties.rubricVersion.enum,
+      ["nirvana-v1"],
+    );
     assert.equal(calls[1].response_format.type, "json_object");
     assert.equal(response.text.includes("test-key-never-returned"), false);
   } finally {

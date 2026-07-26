@@ -7,6 +7,8 @@ export type PromptTelemetry = {
 };
 
 export type AssistantPromptOptions = {
+  interventionMode?: "feedback" | "control" | "shadow";
+  /** Legacy compatibility: true maps to feedback and false maps to control. */
   feedState?: boolean;
   objective?: string;
 };

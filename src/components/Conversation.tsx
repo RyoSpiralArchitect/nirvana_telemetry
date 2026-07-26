@@ -9,6 +9,7 @@ type Props = {
   error: string | null;
   demoMode: boolean;
   contextTrimmed: boolean;
+  draftReadOnly?: boolean;
   backgroundInert?: boolean;
   onDraftChange: (value: string) => void;
   onSend: () => void;
@@ -45,6 +46,7 @@ export function Conversation({
   error,
   demoMode,
   contextTrimmed,
+  draftReadOnly = false,
   backgroundInert = false,
   onDraftChange,
   onSend,
@@ -158,6 +160,7 @@ export function Conversation({
           placeholder="Ask something that rewards uncertainty, correction, or restraint."
           rows={2}
           maxLength={8000}
+          readOnly={draftReadOnly}
           disabled={phase === "answering" || phase === "assessing"}
         />
         {phase === "answering" || phase === "assessing" ? (

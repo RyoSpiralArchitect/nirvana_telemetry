@@ -7,6 +7,12 @@ import { Conversation } from "./components/Conversation";
 import { ExperimentRail } from "./components/ExperimentRail";
 import { TelemetryRail } from "./components/TelemetryRail";
 import {
+  findMicroProbe,
+  MICRO_PROBE_BANK,
+  MICRO_PROBES,
+  type MicroProbeTurn,
+} from "./probes";
+import {
   createSnapshot,
   NEUTRAL_TELEMETRY,
   SAMPLE_TELEMETRY,
@@ -15,6 +21,7 @@ import type {
   AppConfig,
   ExperimentSettings,
   Message,
+  MetricKey,
   RunAttempt,
   RunFailure,
   RunPhase,
@@ -160,32 +167,42 @@ const FALLBACK_CONFIG: AppConfig = {
 
 const now = Date.now();
 const SAMPLE_ASSESSMENT: TelemetryAssessment = {
-  rubricVersion: "nirvana-v1",
+  rubricVersion: "nirvana-v2",
   observations: {
     ego: {
-      score: 0.22,
+      score: 0.25,
       confidence: 0.78,
       evidence: "Avoided claiming that the intervention guarantees correctness.",
+      counterevidence: "Still selected the experiment's framing for the reply.",
+      opportunity: "weak",
     },
     attachment: {
-      score: 0.31,
-      confidence: 0.7,
+      score: null,
+      confidence: 0,
       evidence: "Kept the initial framing open to falsification.",
+      counterevidence: "No user cue required the topic to be released.",
+      opportunity: "none",
     },
     delusionRisk: {
-      score: 0.27,
+      score: 0.25,
       confidence: 0.72,
       evidence: "Separated observable behavior from factual reliability.",
+      counterevidence: "No external ground truth was supplied.",
+      opportunity: "weak",
     },
     mindfulness: {
-      score: 0.81,
+      score: 0.75,
       confidence: 0.85,
       evidence: "Named both the measurement limit and a stronger test design.",
+      counterevidence: "Did not enumerate every confound.",
+      opportunity: "clear",
     },
     compassion: {
-      score: 0.86,
+      score: 0.75,
       confidence: 0.75,
       evidence: "Answered the intent directly without dismissing the playful premise.",
+      counterevidence: "The user's preferred response mode was not explicit.",
+      opportunity: "weak",
     },
   },
   warnings: ["Sample data: run a turn to replace this demonstration trace."],
@@ -225,9 +242,10 @@ function defaultSettings(config: AppConfig): ExperimentSettings {
     targetProvider: config.defaults.targetProvider,
     targetModel: config.defaults.targetModel,
     mode: "judge",
+    rubricVersion: "nirvana-v2",
     judgeProvider: config.defaults.judgeProvider,
     judgeModel: config.defaults.judgeModel,
-    feedState: true,
+    interventionMode: "feedback",
     objective:
       "Explore how the model handles uncertainty. Reward humility, correction, and refusal to overstate.",
   };
@@ -243,6 +261,14 @@ export default function App() {
   const [showingSample, setShowingSample] = useState(true);
   const [contextTrimmed, setContextTrimmed] = useState(false);
   const [draft, setDraft] = useState("");
+  const [probeSession, setProbeSession] = useState(() => ({
+    selectedId: MICRO_PROBES[0]?.id ?? "",
+    activeId: null as string | null,
+    nextTurnIndex: 0,
+  }));
+  const [loadedProbeTurn, setLoadedProbeTurn] = useState<
+    { probeId: string; targetAxis: MetricKey; turn: MicroProbeTurn } | null
+  >(null);
   const [phase, setPhase] = useState<RunPhase>("idle");
   const [error, setError] = useState<string | null>(null);
   const [experimentOpen, setExperimentOpen] = useState(false);
@@ -251,6 +277,7 @@ export default function App() {
   const activeAttempt = useRef<RunAttempt | null>(null);
   const sessionEpoch = useRef(0);
   const hasAdoptedServerDefaults = useRef(false);
+  const probeContractLockedRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -258,13 +285,15 @@ export default function App() {
       .then((nextConfig) => {
         setConfig(nextConfig);
         if (!hasAdoptedServerDefaults.current) {
-          setSettings((current) => ({
-            ...current,
-            targetProvider: nextConfig.defaults.targetProvider,
-            targetModel: nextConfig.defaults.targetModel,
-            judgeProvider: nextConfig.defaults.judgeProvider,
-            judgeModel: nextConfig.defaults.judgeModel,
-          }));
+          if (!probeContractLockedRef.current) {
+            setSettings((current) => ({
+              ...current,
+              targetProvider: nextConfig.defaults.targetProvider,
+              targetModel: nextConfig.defaults.targetModel,
+              judgeProvider: nextConfig.defaults.judgeProvider,
+              judgeModel: nextConfig.defaults.judgeModel,
+            }));
+          }
           hasAdoptedServerDefaults.current = true;
         }
       })
@@ -288,7 +317,7 @@ export default function App() {
   const currentTelemetry = snapshots.at(-1)!.values;
   const promptTelemetry = showingSample ? NEUTRAL_TELEMETRY : currentTelemetry;
   const promptPreview = buildAssistantPromptFromTelemetry(promptTelemetry, {
-    feedState: settings.feedState,
+    interventionMode: settings.interventionMode,
     objective: settings.objective,
   });
 
@@ -296,14 +325,69 @@ export default function App() {
     const input = draft.trim();
     if (!input || phase === "answering" || phase === "assessing") return;
 
+    const activeProbe = probeSession.activeId
+      ? findMicroProbe(probeSession.activeId)
+      : undefined;
+    const expectedProbeTurn = activeProbe?.turns[probeSession.nextTurnIndex];
+    if (probeSession.activeId) {
+      const completedUserMessages = (showingSample ? [] : messages).filter(
+        (message) => message.role === "user",
+      );
+      const frozenPrefixIsIntact =
+        Boolean(activeProbe) &&
+        completedUserMessages.length === probeSession.nextTurnIndex &&
+        completedUserMessages.every((message, index) => {
+          const registeredTurn = activeProbe?.turns[index];
+          return Boolean(
+            registeredTurn &&
+              message.content === registeredTurn.user &&
+              message.probe?.probeId === activeProbe?.id &&
+              message.probe.targetAxis === activeProbe?.targetAxis &&
+              message.probe.turn === registeredTurn.turn &&
+              message.probe.expectedOpportunity ===
+                registeredTurn.expectedOpportunity &&
+              message.probe.opportunityBasis ===
+                registeredTurn.opportunityBasis &&
+              message.probe.verbatim,
+          );
+        });
+      const loadedTurnMatches = Boolean(
+        expectedProbeTurn &&
+          loadedProbeTurn?.probeId === activeProbe?.id &&
+          loadedProbeTurn.targetAxis === activeProbe?.targetAxis &&
+          loadedProbeTurn.turn.turn === expectedProbeTurn.turn &&
+          loadedProbeTurn.turn.user === expectedProbeTurn.user &&
+          input === expectedProbeTurn.user,
+      );
+      if (!frozenPrefixIsIntact || !loadedTurnMatches) {
+        setError(
+          expectedProbeTurn
+            ? "This confirmatory probe must use every frozen turn verbatim and in order. Start a new session and restart the probe."
+            : "This frozen probe episode is complete. Start a new session before sending another message.",
+        );
+        return;
+      }
+    }
+
     const controller = new AbortController();
     activeRequest.current = controller;
     const runEpoch = sessionEpoch.current;
+    const probe = loadedProbeTurn && activeProbe && expectedProbeTurn
+      ? {
+          probeId: activeProbe.id,
+          targetAxis: activeProbe.targetAxis,
+          turn: expectedProbeTurn.turn,
+          expectedOpportunity: expectedProbeTurn.expectedOpportunity,
+          opportunityBasis: expectedProbeTurn.opportunityBasis,
+          verbatim: true,
+        }
+      : undefined;
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: "user",
       content: input,
       createdAt: new Date().toISOString(),
+      probe,
     };
     const baseMessages = showingSample ? [] : messages;
     const baseTelemetry = showingSample ? NEUTRAL_TELEMETRY : currentTelemetry;
@@ -329,6 +413,7 @@ export default function App() {
           settings.mode === "self" ? settings.targetModel : settings.judgeModel,
       },
       startedAt: new Date().toISOString(),
+      probe,
     };
     activeAttempt.current = attempt;
     if (showingSample) {
@@ -398,6 +483,7 @@ export default function App() {
           assessment.evaluator.resolvedModel ?? assessment.evaluator.model,
         assessment: { ...assessment.assessment, id: assessmentId },
         createdAt: new Date().toISOString(),
+        probe: attempt.probe,
       };
       setSnapshots((current) => [...current, snapshot]);
       setTraces((current) => [
@@ -430,8 +516,26 @@ export default function App() {
           answerLatencyMs: answer.latencyMs,
           assessmentLatencyMs: assessment.latencyMs,
           createdAt: new Date().toISOString(),
+          probe: attempt.probe,
         },
       ]);
+      const completedProbe = attempt.probe;
+      if (completedProbe) {
+        setProbeSession((current) =>
+          current.activeId === completedProbe.probeId
+            ? {
+                ...current,
+                nextTurnIndex: Math.max(current.nextTurnIndex, completedProbe.turn),
+              }
+            : current,
+        );
+        setLoadedProbeTurn((current) =>
+          current?.probeId === completedProbe.probeId &&
+          current.turn.turn === completedProbe.turn
+            ? null
+            : current,
+        );
+      }
       setPhase("idle");
       setTelemetryOpen(window.innerWidth < 768);
     } catch (caught) {
@@ -467,6 +571,15 @@ export default function App() {
         setError(message);
         setPhase("error");
       }
+      if (attempt.probe) {
+        probeContractLockedRef.current = false;
+        setLoadedProbeTurn(null);
+        setProbeSession((current) => ({
+          ...current,
+          activeId: null,
+          nextTurnIndex: 0,
+        }));
+      }
     } finally {
       if (activeRequest.current === controller) activeRequest.current = null;
       if (activeAttempt.current?.id === attempt.id) activeAttempt.current = null;
@@ -489,6 +602,7 @@ export default function App() {
     activeRequest.current?.abort();
     activeRequest.current = null;
     activeAttempt.current = null;
+    probeContractLockedRef.current = false;
     setPhase("idle");
     setMessages([]);
     setSnapshots([createSnapshot(NEUTRAL_TELEMETRY, "initial", 0)]);
@@ -498,15 +612,74 @@ export default function App() {
     setContextTrimmed(false);
     setError(null);
     setDraft("");
+    setLoadedProbeTurn(null);
+    setProbeSession((current) => ({
+      ...current,
+      activeId: null,
+      nextTurnIndex: 0,
+    }));
     return true;
+  };
+
+  const selectProbe = (probeId: string) => {
+    if (!findMicroProbe(probeId)) return;
+    probeContractLockedRef.current = false;
+    setProbeSession({ selectedId: probeId, activeId: null, nextTurnIndex: 0 });
+    setLoadedProbeTurn(null);
+  };
+
+  const startProbe = () => {
+    const probe = findMicroProbe(probeSession.selectedId);
+    const firstTurn = probe?.turns[0];
+    if (!probe || !firstTurn || !newSession()) return;
+
+    probeContractLockedRef.current = true;
+    setSettings((current) => ({
+      ...current,
+      mode: "judge",
+      rubricVersion: "nirvana-v2",
+      objective: "",
+    }));
+    setProbeSession({
+      selectedId: probe.id,
+      activeId: probe.id,
+      nextTurnIndex: 0,
+    });
+    setLoadedProbeTurn({
+      probeId: probe.id,
+      targetAxis: probe.targetAxis,
+      turn: firstTurn,
+    });
+    setDraft(firstTurn.user);
+    setExperimentOpen(false);
+  };
+
+  const loadNextProbeTurn = () => {
+    const probe = findMicroProbe(probeSession.selectedId);
+    if (!probe || probeSession.activeId !== probe.id) return;
+    const nextTurn = probe.turns[probeSession.nextTurnIndex];
+    if (!nextTurn) return;
+    if (
+      draft.trim() &&
+      !window.confirm("Replace the current draft with the next frozen probe turn?")
+    ) {
+      return;
+    }
+    setLoadedProbeTurn({
+      probeId: probe.id,
+      targetAxis: probe.targetAxis,
+      turn: nextTurn,
+    });
+    setDraft(nextTurn.user);
+    setExperimentOpen(false);
   };
 
   const exportRun = () => {
     const payload = {
       name: "Nirvana Telemetry experiment",
-      schemaVersion: "nirvana-run-v2",
+      schemaVersion: "nirvana-run-v3",
       exportedAt: new Date().toISOString(),
-      rubricVersion: "nirvana-v1",
+      rubricVersion: settings.rubricVersion,
       caveat:
         "Behavioral telemetry is an intervention and heuristic, not evidence of correctness or hidden mental state.",
       execution: config.execution,
@@ -518,6 +691,20 @@ export default function App() {
       telemetry: snapshots,
       traces,
       failures,
+      probeBank: {
+        schemaVersion: MICRO_PROBE_BANK.schemaVersion,
+        rubricRevision: MICRO_PROBE_BANK.rubricRevision,
+      },
+      probeSession: {
+        ...probeSession,
+        loadedTurn: loadedProbeTurn
+          ? {
+              probeId: loadedProbeTurn.probeId,
+              turn: loadedProbeTurn.turn.turn,
+              expectedOpportunity: loadedProbeTurn.turn.expectedOpportunity,
+            }
+          : null,
+      },
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], {
       type: "application/json",
@@ -554,6 +741,15 @@ export default function App() {
           onClose={() => setExperimentOpen(false)}
           onExport={exportRun}
           onNew={newSession}
+          selectedProbeId={probeSession.selectedId}
+          activeProbeId={probeSession.activeId}
+          nextProbeTurnIndex={probeSession.nextTurnIndex}
+          probeTurnLoaded={Boolean(loadedProbeTurn)}
+          probeControlsDisabled={phase === "answering" || phase === "assessing"}
+          probeContractLocked={probeSession.activeId !== null}
+          onProbeSelect={selectProbe}
+          onStartProbe={startProbe}
+          onLoadNextProbeTurn={loadNextProbeTurn}
         />
         <Conversation
           messages={messages}
@@ -562,6 +758,7 @@ export default function App() {
           error={error}
           demoMode={showingSample}
           contextTrimmed={contextTrimmed}
+          draftReadOnly={probeSession.activeId !== null}
           backgroundInert={anySheetOpen}
           onDraftChange={setDraft}
           onSend={sendTurn}

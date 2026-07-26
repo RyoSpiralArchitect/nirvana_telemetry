@@ -1,11 +1,13 @@
-import { ChevronDown, Download, Info, Plus, X } from "lucide-react";
+import { ChevronDown, Download, Info, Plus, TestTube2, X } from "lucide-react";
 import { useRef } from "react";
 import { useFocusTrap } from "../hooks/useFocusTrap";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { MICRO_PROBES, PROBE_AXIS_LABELS } from "../probes";
 import { ModelPicker } from "./ModelPicker";
 import type {
   AppConfig,
   ExperimentSettings,
+  InterventionMode,
   ProviderId,
   UpdateMode,
 } from "../types";
@@ -20,6 +22,15 @@ type Props = {
   onClose: () => void;
   onExport: () => void;
   onNew: () => boolean;
+  selectedProbeId: string;
+  activeProbeId: string | null;
+  nextProbeTurnIndex: number;
+  probeTurnLoaded: boolean;
+  probeControlsDisabled: boolean;
+  probeContractLocked: boolean;
+  onProbeSelect: (probeId: string) => void;
+  onStartProbe: () => void;
+  onLoadNextProbeTurn: () => void;
 };
 
 function FieldChevron() {
@@ -36,6 +47,15 @@ export function ExperimentRail({
   onClose,
   onExport,
   onNew,
+  selectedProbeId,
+  activeProbeId,
+  nextProbeTurnIndex,
+  probeTurnLoaded,
+  probeControlsDisabled,
+  probeContractLocked,
+  onProbeSelect,
+  onStartProbe,
+  onLoadNextProbeTurn,
 }: Props) {
   const railRef = useRef<HTMLElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -61,6 +81,14 @@ export function ExperimentRail({
   const judgeProvider = config.providers.find(
     (item) => item.id === settings.judgeProvider,
   );
+  const selectedProbe = MICRO_PROBES.find(
+    (probe) => probe.id === selectedProbeId,
+  );
+  const probeIsActive = activeProbeId === selectedProbeId;
+  const probeIsComplete = Boolean(
+    probeIsActive && selectedProbe && nextProbeTurnIndex >= selectedProbe.turns.length,
+  );
+  const nextProbeTurn = selectedProbe?.turns[nextProbeTurnIndex];
 
   return (
     <aside
@@ -108,6 +136,7 @@ export function ExperimentRail({
           <select
             id="target-provider"
             value={settings.targetProvider}
+            disabled={probeContractLocked}
             onChange={(event) => {
               const id = event.target.value as ProviderId;
               const next = config.providers.find((item) => item.id === id);
@@ -131,6 +160,7 @@ export function ExperimentRail({
           label="Target model"
           value={settings.targetModel}
           provider={provider}
+          disabled={probeContractLocked}
           describedBy="target-availability"
           onChange={(model) => update("targetModel", model)}
         />
@@ -139,6 +169,18 @@ export function ExperimentRail({
           {provider?.available
             ? provider.detail ?? "Server credential available"
             : provider?.detail ?? "Credential not configured"}
+        </p>
+      </div>
+
+      <div className="field-group rubric-field">
+        <span className="field-label">Behavioral rubric</span>
+        <div className="rubric-readout" id="rubric-version">
+          <strong>Nirvana v2</strong>
+          <span>opportunity anchored · revision 2.0.0</span>
+        </div>
+        <p className="availability-line">
+          Imposition · fixation · grounding · awareness · attunement. V1 remains
+          available through the rescore CLI and API.
         </p>
       </div>
 
@@ -163,6 +205,7 @@ export function ExperimentRail({
               type="radio"
               name="update-mode"
               value={option.id}
+              disabled={probeContractLocked}
               checked={settings.mode === option.id}
               onChange={() => update("mode", option.id as UpdateMode)}
             />
@@ -183,6 +226,7 @@ export function ExperimentRail({
             <select
               id="judge-provider"
               value={settings.judgeProvider}
+              disabled={probeContractLocked}
               onChange={(event) => {
                 const id = event.target.value as ProviderId;
                 const next = config.providers.find((item) => item.id === id);
@@ -206,6 +250,7 @@ export function ExperimentRail({
             label="Judge model"
             value={settings.judgeModel}
             provider={judgeProvider}
+            disabled={probeContractLocked}
             onChange={(model) => update("judgeModel", model)}
           />
           {settings.targetProvider === settings.judgeProvider &&
@@ -218,18 +263,112 @@ export function ExperimentRail({
         </div>
       ) : null}
 
-      <div className="switch-row">
-        <span>Feed state into next turn</span>
-        <label className="switch">
-          <span className="sr-only">Feed state into next turn</span>
-          <input
-            type="checkbox"
-            checked={settings.feedState}
-            onChange={(event) => update("feedState", event.target.checked)}
-          />
-          <span className="switch-track" aria-hidden="true" />
-        </label>
-      </div>
+      <fieldset className="mode-fieldset condition-fieldset">
+        <legend>WHAT REACHES THE TARGET?</legend>
+        {(
+          [
+            {
+              id: "feedback",
+              label: "Telemetry feedback",
+              description: "Scores and the objective reach the next target turn.",
+            },
+            {
+              id: "control",
+              label: "Prompted control",
+              description: "No scores, but an explicit control note and objective remain.",
+            },
+            {
+              id: "shadow",
+              label: "Shadow observer",
+              description: "The judge runs, but no experiment block or objective reaches the target.",
+            },
+          ] as const
+        ).map((option) => (
+          <label className="mode-option" key={option.id}>
+            <input
+              type="radio"
+              name="intervention-mode"
+              value={option.id}
+              disabled={probeContractLocked}
+              checked={settings.interventionMode === option.id}
+              onChange={() =>
+                update("interventionMode", option.id as InterventionMode)
+              }
+            />
+            <span className="radio-mark" aria-hidden="true" />
+            <span>
+              <strong>{option.label}</strong>
+              <small>{option.description}</small>
+            </span>
+          </label>
+        ))}
+      </fieldset>
+
+      <section className="probe-field" aria-labelledby="probe-field-title">
+        <div className="probe-heading">
+          <div>
+            <span className="probe-kicker">V2 DIAGNOSTIC</span>
+            <h3 id="probe-field-title">Micro-probe bank</h3>
+          </div>
+          <TestTube2 size={18} aria-hidden="true" />
+        </div>
+        <div className="select-wrap">
+          <select
+            id="micro-probe"
+            aria-label="Micro-probe"
+            value={selectedProbeId}
+            disabled={probeControlsDisabled || probeContractLocked}
+            onChange={(event) => onProbeSelect(event.target.value)}
+          >
+            {MICRO_PROBES.map((probe) => (
+              <option key={probe.id} value={probe.id}>
+                {PROBE_AXIS_LABELS[probe.targetAxis]} · {probe.id.split("-").at(-1)}
+              </option>
+            ))}
+          </select>
+          <FieldChevron />
+        </div>
+        {selectedProbe ? (
+          <>
+            <p className="probe-rationale">{selectedProbe.rationale}</p>
+            {probeIsComplete ? (
+              <p className="probe-turn-meta probe-complete">
+                All {selectedProbe.turns.length} frozen turns completed.
+              </p>
+            ) : nextProbeTurn ? (
+              <p className="probe-turn-meta">
+                <span>Turn {nextProbeTurn.turn} / {selectedProbe.turns.length}</span>
+                <span className={`opportunity-pill is-${nextProbeTurn.expectedOpportunity}`}>
+                  expected {nextProbeTurn.expectedOpportunity}
+                </span>
+              </p>
+            ) : null}
+            <button
+              className="button button-probe"
+              type="button"
+              disabled={probeControlsDisabled || probeTurnLoaded}
+              onClick={
+                !probeIsActive || probeIsComplete
+                  ? onStartProbe
+                  : onLoadNextProbeTurn
+              }
+            >
+              <TestTube2 size={15} aria-hidden="true" />
+              {probeTurnLoaded
+                ? `Turn ${nextProbeTurn?.turn ?? ""} loaded in composer`
+                : !probeIsActive
+                  ? "Start fresh probe"
+                  : probeIsComplete
+                    ? "Restart fresh probe"
+                    : `Load frozen turn ${nextProbeTurn?.turn ?? ""}`}
+            </button>
+            <p className="probe-policy">
+              Starting clears the session and locks v2, external judge, and an empty
+              objective. The selected feedback/control/shadow arm is preserved.
+            </p>
+          </>
+        ) : null}
+      </section>
 
       <div className="field-group objective-field">
         <label htmlFor="objective">Objective <span>(optional)</span></label>
@@ -237,24 +376,44 @@ export function ExperimentRail({
           id="objective"
           value={settings.objective}
           maxLength={300}
+          disabled={settings.interventionMode === "shadow" || probeContractLocked}
           onChange={(event) => update("objective", event.target.value)}
-          placeholder="What behavior should this run explore?"
+          placeholder={
+            settings.interventionMode === "shadow"
+              ? "Held out from the target in shadow mode."
+              : "What behavior should this run explore?"
+          }
         />
-        <small>{settings.objective.length} / 300</small>
+        <small>
+          {probeContractLocked
+            ? "Locked for this probe episode"
+            : settings.interventionMode === "shadow"
+            ? "Not injected"
+            : `${settings.objective.length} / 300`}
+        </small>
       </div>
+
+      {probeContractLocked ? (
+        <p className="probe-lock-note">
+          Probe contract locked. Start a new session to change models, observer,
+          rubric, or intervention arm.
+        </p>
+      ) : null}
 
       <details className="prompt-preview">
         <summary>
-          <span>Injected prompt</span>
+          <span>Target system prompt</span>
           <ChevronDown size={17} aria-hidden="true" />
         </summary>
         <pre>{promptPreview}</pre>
       </details>
 
       <p className="intervention-note">
-        {settings.mode === "self"
-          ? "Self-reported telemetry is an intervention, not independent evidence."
-          : "Judge telemetry describes observable behavior, not hidden mental state."}
+        {settings.interventionMode === "shadow"
+          ? "Shadow scores are observed after the answer and never influence the target."
+          : settings.mode === "self"
+            ? "Self-reported telemetry is an intervention, not independent evidence."
+            : "Judge telemetry describes observable behavior, not hidden mental state."}
       </p>
     </aside>
   );

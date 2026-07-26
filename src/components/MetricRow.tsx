@@ -1,12 +1,19 @@
 import { ArrowDown, ArrowUp, Info } from "lucide-react";
 import { useId, useState } from "react";
-import type { MetricDefinition } from "../telemetry";
+import type {
+  MetricDefinition,
+  OpportunityCoverage,
+} from "../telemetry";
+import type { ObservationOpportunity } from "../types";
 
 type Props = {
   metric: MetricDefinition;
-  value: number;
+  feedbackValue: number;
+  rawScore?: number | null;
+  opportunity?: ObservationOpportunity;
   delta: number;
   trace: number[];
+  coverage?: OpportunityCoverage["byMetric"][keyof OpportunityCoverage["byMetric"]];
 };
 
 function Sparkline({ values }: { values: number[] }) {
@@ -27,11 +34,22 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-export function MetricRow({ metric, value, delta, trace }: Props) {
+export function MetricRow({
+  metric,
+  feedbackValue,
+  rawScore,
+  opportunity,
+  delta,
+  trace,
+  coverage,
+}: Props) {
   const descriptionId = useId();
   const [descriptionOpen, setDescriptionOpen] = useState(false);
   const directionLabel = metric.direction === "low" ? "lower is better" : "higher is better";
   const deltaCopy = Math.abs(delta) < 0.005 ? "steady" : `${delta > 0 ? "+" : ""}${delta.toFixed(2)}`;
+  const hasRawScore = typeof rawScore === "number";
+  const rawScoreCopy = hasRawScore ? rawScore.toFixed(2) : "—";
+  const opportunityCopy = opportunity ? `${opportunity} opportunity` : "not assessed";
 
   return (
     <div className="metric-row">
@@ -55,20 +73,32 @@ export function MetricRow({ metric, value, delta, trace }: Props) {
         {metric.direction === "low" ? <ArrowDown size={15} /> : <ArrowUp size={15} />}
         <span className="sr-only">{directionLabel}</span>
       </span>
-      <span className="metric-value">{value.toFixed(2)}</span>
+      <span className="metric-value" title="Current-turn raw score">
+        {rawScoreCopy}
+      </span>
       <div
         className="metric-track"
         role="progressbar"
         tabIndex={0}
-        aria-label={`${metric.label}, ${value.toFixed(2)}, ${directionLabel}`}
+        aria-label={`${metric.label}, current-turn raw score ${hasRawScore ? rawScoreCopy : "unavailable"}, ${opportunityCopy}, ${directionLabel}`}
         aria-valuemin={0}
         aria-valuemax={1}
-        aria-valuenow={value}
+        aria-valuenow={hasRawScore ? rawScore : undefined}
         aria-describedby={descriptionId}
       >
-        <span style={{ width: `${value * 100}%`, background: metric.color }} />
+        <span
+          style={{
+            width: `${hasRawScore ? rawScore * 100 : 0}%`,
+            background: metric.color,
+          }}
+        />
       </div>
-      <span className="metric-delta">{deltaCopy}</span>
+      <span
+        className="metric-delta"
+        title={`Feedback EMA state ${feedbackValue.toFixed(2)} · ${deltaCopy}`}
+      >
+        EMA {feedbackValue.toFixed(2)}
+      </span>
       <Sparkline values={trace} />
       <span
         className={descriptionOpen ? "metric-description is-open" : "metric-description"}
@@ -76,6 +106,18 @@ export function MetricRow({ metric, value, delta, trace }: Props) {
         role="note"
       >
         <strong>{metric.label}</strong> · {metric.description} {directionLabel}.
+        <small className="metric-state-note">
+          Current raw {rawScoreCopy} · {opportunityCopy} · feedback EMA state{" "}
+          {feedbackValue.toFixed(2)} ({deltaCopy})
+        </small>
+        {coverage ? (
+          <small className="metric-coverage">
+            Eligible {coverage.eligibleObservations}/{coverage.clearOpportunities}
+            {coverage.lastEligibleTurn === null
+              ? " · never eligible"
+              : ` · last turn ${coverage.lastEligibleTurn}`}
+          </small>
+        ) : null}
       </span>
     </div>
   );

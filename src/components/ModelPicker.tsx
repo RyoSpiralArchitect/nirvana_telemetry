@@ -6,6 +6,7 @@ type Props = {
   value: string;
   provider?: ProviderConfig;
   describedBy?: string;
+  disabled?: boolean;
   onChange: (value: string) => void;
 };
 
@@ -22,6 +23,7 @@ export function ModelPicker({
   value,
   provider,
   describedBy,
+  disabled = false,
   onChange,
 }: Props) {
   const options = provider?.modelOptions ?? [];
@@ -45,6 +47,7 @@ export function ModelPicker({
         className="model-input"
         value={value}
         list={`${id}-options`}
+        disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
         autoComplete="off"
         aria-describedby={describedByIds || undefined}
@@ -68,6 +71,7 @@ export function ModelPicker({
               className={`model-preset ${value === option.id ? "is-selected" : ""}`}
               aria-pressed={value === option.id}
               title={`${option.id} · ${option.role} · ${transportLabel(option)}`}
+              disabled={disabled}
               onClick={() => onChange(option.id)}
             >
               {option.label}

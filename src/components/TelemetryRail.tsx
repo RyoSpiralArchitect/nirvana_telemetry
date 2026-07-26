@@ -5,6 +5,7 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import {
   deltaFor,
   METRICS,
+  opportunityCoverage,
   traceFor,
 } from "../telemetry";
 import type { TelemetrySnapshot } from "../types";
@@ -52,10 +53,16 @@ export function TelemetryRail({
   });
 
   const current = snapshots.at(-1)!;
+  const coverage = opportunityCoverage(snapshots);
   const evidence = current.assessment
     ? METRICS.map((metric) => ({
         label: metric.label,
         text: current.assessment?.observations[metric.key].evidence,
+        counterevidence:
+          current.assessment?.observations[metric.key].counterevidence,
+        opportunity:
+          current.assessment?.observations[metric.key].opportunity,
+        rawScore: current.assessment?.observations[metric.key].score,
       })).filter((item) => item.text)
     : [];
 
@@ -79,8 +86,8 @@ export function TelemetryRail({
       </div>
 
       <CompositeDial
-        values={current.values}
         provenance={scoreProvenance(current)}
+        coverage={coverage}
       />
 
       <section className="metric-list" aria-label="Behavioral metrics">
@@ -88,9 +95,12 @@ export function TelemetryRail({
           <MetricRow
             key={metric.key}
             metric={metric}
-            value={current.values[metric.key]}
+            feedbackValue={current.values[metric.key]}
+            rawScore={current.assessment?.observations[metric.key].score}
+            opportunity={current.assessment?.observations[metric.key].opportunity}
             delta={deltaFor(snapshots, metric.key)}
             trace={traceFor(snapshots, metric.key)}
+            coverage={coverage.byMetric[metric.key]}
           />
         ))}
       </section>
@@ -108,7 +118,7 @@ export function TelemetryRail({
               <div>
                 <strong>{sourceName(snapshot.source)}</strong>
                 <small>
-                  {snapshot.evaluatorModel ?? "nirvana-v1"} · {new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(snapshot.createdAt))}
+                  {snapshot.evaluatorModel ?? snapshot.assessment?.rubricVersion ?? "baseline"} · {new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(snapshot.createdAt))}
                 </small>
               </div>
             </li>
@@ -126,7 +136,21 @@ export function TelemetryRail({
             {evidence.map((item) => (
               <li key={item.label}>
                 <FileText size={15} aria-hidden="true" />
-                <span><strong>{item.label}</strong>{item.text}</span>
+                <span>
+                  <strong>{item.label}</strong>
+                  <small className="evidence-meta">
+                    {item.opportunity
+                      ? `${item.opportunity} opportunity`
+                      : "legacy observation"}
+                    {item.rawScore === null || item.rawScore === undefined
+                      ? " · unscored"
+                      : ` · raw ${item.rawScore.toFixed(2)}`}
+                  </small>
+                  {item.text}
+                  {item.counterevidence ? (
+                    <em>Counterevidence: {item.counterevidence}</em>
+                  ) : null}
+                </span>
               </li>
             ))}
           </ul>

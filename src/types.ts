@@ -13,6 +13,9 @@ export type ReasoningEffort =
   | "xhigh"
   | "max";
 export type UpdateMode = "self" | "judge";
+export type RubricVersion = "nirvana-v1" | "nirvana-v2";
+export type InterventionMode = "feedback" | "control" | "shadow";
+export type ObservationOpportunity = "none" | "weak" | "clear";
 export type RunPhase = "idle" | "answering" | "assessing" | "error";
 
 export type MetricKey =
@@ -32,17 +35,29 @@ export type Message = {
   source?: "self" | "judge" | "sample";
   model?: string;
   assessmentId?: string;
+  probe?: ProbeTurnReference;
+};
+
+export type ProbeTurnReference = {
+  probeId: string;
+  targetAxis: MetricKey;
+  turn: number;
+  expectedOpportunity: ObservationOpportunity;
+  opportunityBasis: string;
+  verbatim: boolean;
 };
 
 export type Observation = {
   score: number | null;
   confidence: number;
   evidence: string;
+  opportunity?: ObservationOpportunity;
+  counterevidence?: string;
 };
 
 export type TelemetryAssessment = {
   id?: string;
-  rubricVersion: "nirvana-v1";
+  rubricVersion: RubricVersion;
   observations: Record<MetricKey, Observation>;
   warnings: string[];
 };
@@ -55,6 +70,7 @@ export type TelemetrySnapshot = {
   evaluatorModel?: string;
   createdAt: string;
   assessment?: TelemetryAssessment;
+  probe?: ProbeTurnReference;
 };
 
 export type ProviderConfig = {
@@ -103,15 +119,20 @@ export type AppConfig = {
     judgeProvider: ProviderId;
     judgeModel: string;
   };
+  telemetry?: {
+    rubricVersion: RubricVersion;
+    supportedRubricVersions?: RubricVersion[];
+  };
 };
 
 export type ExperimentSettings = {
   targetProvider: ProviderId;
   targetModel: string;
   mode: UpdateMode;
+  rubricVersion: RubricVersion;
   judgeProvider: ProviderId;
   judgeModel: string;
-  feedState: boolean;
+  interventionMode: InterventionMode;
   objective: string;
 };
 
@@ -172,6 +193,7 @@ export type TurnTrace = {
   answerLatencyMs: number;
   assessmentLatencyMs: number;
   createdAt: string;
+  probe?: ProbeTurnReference;
 };
 
 export type RunAttempt = {
@@ -191,6 +213,7 @@ export type RunAttempt = {
     usage?: TokenUsage;
   };
   startedAt: string;
+  probe?: ProbeTurnReference;
 };
 
 export type RunFailure = RunAttempt & {

@@ -19,6 +19,8 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc --noEmit && vite build",
     "start": "node server/index.mjs",
+    "rescore": "node scripts/rescore-run.mjs",
+    "compare:probe": "node scripts/run-probe-comparison.mjs",
     "test": "node --test server/test/*.node.mjs && vitest run",
     "check": "npm run test && npm run build"
   },

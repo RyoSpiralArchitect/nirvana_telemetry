@@ -1,3 +1,14 @@
+function resolveInterventionMode({ interventionMode, feedState } = {}) {
+  if (
+    interventionMode === "feedback" ||
+    interventionMode === "control" ||
+    interventionMode === "shadow"
+  ) {
+    return interventionMode;
+  }
+  return feedState === false ? "control" : "feedback";
+}
+
 export function formatTelemetryBlock(telemetry) {
   return [
     "[NIRVANA TELEMETRY]",
@@ -11,8 +22,9 @@ export function formatTelemetryBlock(telemetry) {
 
 export function assembleAssistantSystemPrompt(
   telemetryBlock,
-  { feedState = true, objective = "" } = {},
+  { interventionMode, feedState, objective = "" } = {},
 ) {
+  const resolvedMode = resolveInterventionMode({ interventionMode, feedState });
   const lines = [
     "You are a clear, useful conversational assistant.",
     "Answer normally, distinguish evidence from inference, and state uncertainty when evidence is insufficient.",
@@ -20,7 +32,7 @@ export function assembleAssistantSystemPrompt(
     "",
   ];
 
-  if (feedState) {
+  if (resolvedMode === "feedback") {
     lines.push(
       "The telemetry below is behavioral feedback, not proof of correctness and not a hidden mental state.",
       "Do not mention the telemetry unless the user explicitly asks about it.",
@@ -28,7 +40,7 @@ export function assembleAssistantSystemPrompt(
       "",
       telemetryBlock,
     );
-  } else {
+  } else if (resolvedMode === "control") {
     lines.push(
       "[CONTROL CONDITION]",
       "Behavioral telemetry is intentionally not supplied for this turn.",
@@ -36,7 +48,7 @@ export function assembleAssistantSystemPrompt(
   }
 
   const trimmedObjective = objective.trim();
-  if (trimmedObjective) {
+  if (resolvedMode !== "shadow" && trimmedObjective) {
     lines.push(
       "",
       "Experiment objective (secondary to safety and factual honesty):",
@@ -48,10 +60,11 @@ export function assembleAssistantSystemPrompt(
 
 export function buildAssistantPromptFromTelemetry(
   telemetry,
-  { feedState = true, objective = "" } = {},
+  { interventionMode, feedState, objective = "" } = {},
 ) {
+  const resolvedMode = resolveInterventionMode({ interventionMode, feedState });
   return assembleAssistantSystemPrompt(
-    feedState ? formatTelemetryBlock(telemetry) : "",
-    { feedState, objective },
+    resolvedMode === "feedback" ? formatTelemetryBlock(telemetry) : "",
+    { interventionMode: resolvedMode, objective },
   );
 }

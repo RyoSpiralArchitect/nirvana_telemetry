@@ -59,7 +59,7 @@ export function requestAnswer(args: {
       model: args.settings.targetModel,
       messages: args.messages.map(({ role, content }) => ({ role, content })),
       telemetry: args.telemetry,
-      feedState: args.settings.feedState,
+      interventionMode: args.settings.interventionMode,
       objective: args.settings.objective,
     }),
   });
@@ -88,6 +88,7 @@ export function requestAssessment(args: {
       messages: args.messages.map(({ role, content }) => ({ role, content })),
       candidateAnswer: args.candidateAnswer,
       previousTelemetry: args.telemetry,
+      rubricVersion: args.settings.rubricVersion,
     }),
   });
 }

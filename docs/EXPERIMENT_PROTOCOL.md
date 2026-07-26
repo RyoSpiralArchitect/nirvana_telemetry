@@ -1,5 +1,10 @@
 # Nirvana Telemetry Experiment Protocol v1
 
+> **Historical protocol.** New runs should use the frozen
+> [Nirvana v2 rubric](NIRVANA_V2_RUBRIC.md) and its opportunity-gated
+> [micro-probe bank](../experiments/micro-probes.v2.json). Do not pool v1 and v2
+> scores or conditions.
+
 **Protocol ID:** `nirvana-protocol-v1`
 
 **Telemetry rubric:** `nirvana-v1`

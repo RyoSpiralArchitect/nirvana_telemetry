@@ -1,5 +1,7 @@
 import {
+  DEFAULT_RUBRIC_VERSION,
   DEFAULT_TELEMETRY,
+  RUBRIC_VERSIONS,
   TELEMETRY_DIMENSIONS,
   normalizeTelemetryValues,
 } from "./telemetry.mjs";
@@ -15,6 +17,11 @@ export const REQUEST_LIMITS = Object.freeze({
 });
 
 export const PROVIDER_IDS = Object.freeze(["mock", "openai", "anthropic"]);
+export const INTERVENTION_MODES = Object.freeze([
+  "feedback",
+  "control",
+  "shadow",
+]);
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -201,6 +208,35 @@ export function validateRespondBody(input, defaults) {
     throw new HttpError(400, "invalid_feed_state", "feedState must be a boolean.");
   }
   if (
+    body.interventionMode !== undefined &&
+    !INTERVENTION_MODES.includes(body.interventionMode)
+  ) {
+    throw new HttpError(
+      400,
+      "invalid_intervention_mode",
+      `interventionMode must be one of: ${INTERVENTION_MODES.join(", ")}.`,
+    );
+  }
+  const legacyInterventionMode =
+    body.feedState === undefined
+      ? undefined
+      : body.feedState
+        ? "feedback"
+        : "control";
+  if (
+    body.interventionMode !== undefined &&
+    body.feedState !== undefined &&
+    body.interventionMode !== legacyInterventionMode
+  ) {
+    throw new HttpError(
+      400,
+      "conflicting_intervention_mode",
+      "interventionMode conflicts with the legacy feedState value.",
+    );
+  }
+  const interventionMode =
+    body.interventionMode ?? legacyInterventionMode ?? "feedback";
+  if (
     body.objective !== undefined &&
     (typeof body.objective !== "string" ||
       body.objective.length > REQUEST_LIMITS.objectiveChars)
@@ -215,7 +251,9 @@ export function validateRespondBody(input, defaults) {
     messages: validateMessages(body.messages, { requireFinalUser: true }),
     telemetry: validateTelemetryInput(body.telemetry),
     target: validateModelRef(inlineModelRef(body, "target"), defaults.target, "target"),
-    feedState: body.feedState ?? true,
+    interventionMode,
+    // Retain the normalized legacy field for callers that have not migrated.
+    feedState: interventionMode === "feedback",
     objective: body.objective?.trim() ?? "",
   };
 }
@@ -223,6 +261,15 @@ export function validateRespondBody(input, defaults) {
 export function validateAssessBody(input, defaults) {
   const body = requirePlainObject(input);
   rejectClientCredentials(body);
+
+  const rubricVersion = body.rubricVersion ?? DEFAULT_RUBRIC_VERSION;
+  if (!RUBRIC_VERSIONS.includes(rubricVersion)) {
+    throw new HttpError(
+      400,
+      "invalid_rubric_version",
+      `rubricVersion must be one of: ${RUBRIC_VERSIONS.join(", ")}.`,
+    );
+  }
 
   const mode = body.mode ?? "self";
   if (mode !== "self" && mode !== "judge") {
@@ -249,6 +296,7 @@ export function validateAssessBody(input, defaults) {
 
   return {
     mode,
+    rubricVersion,
     messages: validateMessages(body.messages),
     candidateAnswer: body.candidateAnswer,
     previousTelemetry: validateTelemetryInput(
